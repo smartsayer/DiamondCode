@@ -65,11 +65,14 @@ class AIPicksEngine:
             "nrfi_parlay": nrfi_parlay,
             "f5_under_parlay": f5_under_parlay,
             "team_total_parlay": team_total_parlay,
-            "best_edge_parlay": best_edge_parlay,
+            # best_edge_parlay builds its own edges — skip re-enrichment
         }
         for _name, p in all_parlays.items():
             if p:
                 self._enrich_parlay_edges(p, under_lookup, dog_lookup, fave_lookup)
+
+        # Compute parlay-level edge for best_edge_parlay from its pre-built leg edges
+        self._compute_best_edge_parlay_ev(best_edge_parlay)
 
         return {
             "safe_play": _strip([safe_play])[0] if safe_play else None,
@@ -1962,6 +1965,32 @@ class AIPicksEngine:
             return f"+{round(payout * 100)}", payout
         return f"{round(-100 / payout)}", payout
 
+    def _compute_best_edge_parlay_ev(self, parlay: dict) -> None:
+        """Compute joint parlay EV from pre-built leg edges (skip re-enrichment)."""
+        legs = parlay.get("legs") or []
+        if not legs:
+            return
+        joint_prob = 1.0
+        any_priced = False
+        for leg in legs:
+            e = leg.get("edge") or {}
+            p = e.get("our_prob")
+            if p is not None:
+                joint_prob *= p
+                any_priced = True
+            else:
+                mkt = leg.get("odds")
+                if mkt is not None:
+                    joint_prob *= pricing.american_to_prob(mkt)
+        if not any_priced:
+            return
+        combined_str = parlay.get("combined_odds", "")
+        try:
+            combined_int = int(str(combined_str).replace("+", "").replace("−", "-"))
+            parlay["parlay_edge"] = pricing.price_leg(joint_prob, combined_int)
+        except (ValueError, AttributeError, TypeError):
+            pass
+
     def _build_best_edge_parlay(
         self,
         top_unders: list[dict[str, Any]],
@@ -1981,7 +2010,7 @@ class AIPicksEngine:
             market = u.get("best_price") or -110
             our_prob = pricing.under_prob_from_score(score)
             e = pricing.price_leg(our_prob, market)
-            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+            if e.get("edge_pct") is None or e["edge_pct"] < 0.0:
                 continue
             candidates.append({
                 "game_pk": u.get("game_pk"),
@@ -2003,7 +2032,7 @@ class AIPicksEngine:
             base = pricing.american_to_prob(ml)
             our_prob = max(0.45, min(0.85, base + (score - 50) * 0.0010))
             e = pricing.price_leg(our_prob, ml)
-            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+            if e.get("edge_pct") is None or e["edge_pct"] < 0.0:
                 continue
             candidates.append({
                 "game_pk": f.get("game_pk"),
@@ -2025,7 +2054,7 @@ class AIPicksEngine:
             our_prob = pricing.fav_cover_prob_from_score(score, ml, 1.5)
             rl_odds = self._estimate_fav_rl_odds(ml)
             e = pricing.price_leg(our_prob, rl_odds)
-            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+            if e.get("edge_pct") is None or e["edge_pct"] < 0.0:
                 continue
             candidates.append({
                 "game_pk": f.get("game_pk"),
@@ -2046,7 +2075,7 @@ class AIPicksEngine:
             score = d.get("dog_score", 50)
             our_prob = pricing.dog_win_prob_from_score(score, ml)
             e = pricing.price_leg(our_prob, ml)
-            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+            if e.get("edge_pct") is None or e["edge_pct"] < 0.0:
                 continue
             candidates.append({
                 "game_pk": d.get("game_pk"),
@@ -2069,7 +2098,7 @@ class AIPicksEngine:
             our_prob = max(0.50, min(0.92, our_prob + (score - 50) * 0.0010))
             rl_odds = self._estimate_dog_rl_odds(ml)
             e = pricing.price_leg(our_prob, rl_odds)
-            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+            if e.get("edge_pct") is None or e["edge_pct"] < 0.0:
                 continue
             candidates.append({
                 "game_pk": d.get("game_pk"),
@@ -2082,13 +2111,7 @@ class AIPicksEngine:
                 "_score": e["edge_pct"],
             })
 
-        if not candidates:
-            return {
-                "legs": [], "combined_odds": "—", "payout_per_100": 0,
-                "structure": "", "note": "No legs clear EDGE tier today — check back as lines sharpen",
-            }
-
-        # Sort by edge%, deduplicate by game_pk (best bet per game only)
+        # Sort by edge%, deduplicate by game_pk (best bet per game only), fill to 4
         candidates.sort(key=lambda x: x["_score"], reverse=True)
         seen_games: set = set()
         top: list[dict] = []
@@ -2104,7 +2127,7 @@ class AIPicksEngine:
         if not top:
             return {
                 "legs": [], "combined_odds": "—", "payout_per_100": 0,
-                "structure": "", "note": "No legs clear EDGE tier today",
+                "structure": "", "note": "No EDGE-tier legs today — check back as lines sharpen",
             }
 
         # Rank labels by edge tier
@@ -2116,15 +2139,18 @@ class AIPicksEngine:
 
         combined, payout = self._calc_parlay_odds([l["odds"] for l in top])
         structure = " · ".join(f"#{l['rank']} {l['play'].split()[0]}" for l in top)
-        avg_ev = round(sum(l["edge"].get("edge_pct", 0) for l in top) / len(top), 1)
+        evs = [l["edge"].get("edge_pct", 0) or 0 for l in top]
+        avg_ev = round(sum(evs) / len(evs), 1)
+        best_tier = top[0]["edge"].get("tier", "FAIR") if top else "FAIR"
 
         return {
             "legs": top,
             "combined_odds": combined,
             "payout_per_100": round(payout * 100, 2),
             "structure": structure,
-            "note": f"{len(top)}-leg best-edge stack · avg leg EV +{avg_ev}% · pure signal, no fixed structure",
+            "note": f"{len(top)}-leg best-edge stack · avg leg EV {'+' if avg_ev >= 0 else ''}{avg_ev}% · pure signal, no fixed structure",
             "avg_leg_ev": avg_ev,
+            "best_tier": best_tier,
         }
 
     def _empty(self) -> dict[str, Any]:
