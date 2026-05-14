@@ -793,16 +793,17 @@ function LiveTracker({ games }) {
 }
 
 function ParlayCard({ parlay, title, accentColor, icon }) {
-  if (!parlay?.legs?.length) return null;
+  if (!parlay) return null;
+  const hasLegs = parlay.legs && parlay.legs.length > 0;
   return (
     <div style={{
-      background: "#0a0a0a", border: `2px solid ${accentColor}`, borderRadius: 10,
+      background: "#0a0a0a", border: `2px solid ${hasLegs ? accentColor : "#333"}`, borderRadius: 10,
       padding: "18px 20px", marginBottom: 24,
-      boxShadow: `0 0 24px ${accentColor}20`,
+      boxShadow: hasLegs ? `0 0 24px ${accentColor}20` : "none",
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: accentColor, letterSpacing: 3, fontWeight: 900 }}>
+          <div style={{ fontSize: 11, color: hasLegs ? accentColor : "#555", letterSpacing: 3, fontWeight: 900 }}>
             {icon} {title}
           </div>
           <div style={{ fontSize: 9, color: "#666", marginTop: 4 }}>{parlay.note}</div>
@@ -812,6 +813,7 @@ function ParlayCard({ parlay, title, accentColor, icon }) {
             </div>
           )}
         </div>
+        {hasLegs && (
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 22, color: accentColor, fontWeight: 900, fontFamily: "monospace" }}>
             {parlay.combined_odds}
@@ -820,9 +822,19 @@ function ParlayCard({ parlay, title, accentColor, icon }) {
             ${parlay.payout_per_100}/$100
           </div>
         </div>
+        )}
       </div>
 
-      {parlay.legs.map((leg, i) => {
+      {!hasLegs && (
+        <div style={{
+          textAlign: "center", padding: "20px 0", color: "#444",
+          fontSize: 10, letterSpacing: 2, fontFamily: "monospace",
+        }}>
+          ⏳ WAITING FOR LINES — REFRESHES AUTOMATICALLY
+        </div>
+      )}
+
+      {hasLegs && parlay.legs.map((leg, i) => {
         const isUnder = leg.type === "UNDER";
         const isOver = leg.type === "OVER";
         const legColor = isUnder ? "#00ff87" : isOver ? "#fbbf24" : "#a78bfa";
@@ -1098,17 +1110,18 @@ function PleaserCard({ parlay }) {
 }
 
 function OutTheParkCard({ parlay }) {
-  if (!parlay?.legs?.length) return null;
+  if (!parlay) return null;
+  const hasLegs = parlay.legs && parlay.legs.length > 0;
   return (
     <div style={{
       background: "linear-gradient(135deg, #0a0a0a 0%, #1a0033 100%)",
-      border: "2px solid #c026d3", borderRadius: 10,
+      border: `2px solid ${hasLegs ? "#c026d3" : "#2a1a2a"}`, borderRadius: 10,
       padding: "18px 20px", marginBottom: 24,
-      boxShadow: "0 0 32px #c026d335",
+      boxShadow: hasLegs ? "0 0 32px #c026d335" : "none",
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: "#e879f9", letterSpacing: 3, fontWeight: 900 }}>
+          <div style={{ fontSize: 11, color: hasLegs ? "#e879f9" : "#555", letterSpacing: 3, fontWeight: 900 }}>
             🚀💥 OUT THE PARK PARLAY
           </div>
           <div style={{ fontSize: 9, color: "#888", marginTop: 4 }}>{parlay.note}</div>
@@ -1118,6 +1131,7 @@ function OutTheParkCard({ parlay }) {
             </div>
           )}
         </div>
+        {hasLegs && (
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 28, color: "#e879f9", fontWeight: 900, fontFamily: "monospace", textShadow: "0 0 12px #c026d350" }}>
             {parlay.combined_odds}
@@ -1126,8 +1140,10 @@ function OutTheParkCard({ parlay }) {
             ${parlay.payout_per_100?.toLocaleString()}/$100
           </div>
         </div>
+        )}
       </div>
 
+      {hasLegs && (
       <div style={{
         fontSize: 9, color: "#f0abfc", marginBottom: 10, lineHeight: 1.5,
         padding: "10px 12px", background: "#c026d310", borderRadius: 4,
@@ -1137,8 +1153,18 @@ function OutTheParkCard({ parlay }) {
         Dogs must win OUTRIGHT BY 2+. Faves must cover -1.5. Unders must hit 1.5 runs lower than the line.
         Hits the rarest. Cashes the biggest.
       </div>
+      )}
 
-      {parlay.legs.map((leg, i) => {
+      {!hasLegs && (
+        <div style={{
+          textAlign: "center", padding: "20px 0", color: "#444",
+          fontSize: 10, letterSpacing: 2, fontFamily: "monospace",
+        }}>
+          ⏳ WAITING FOR LINES — REFRESHES AUTOMATICALLY
+        </div>
+      )}
+
+      {hasLegs && parlay.legs.map((leg, i) => {
         const isUnder = leg.type === "OTP_UNDER";
         const isDog = leg.type === "OTP_DOG_RL";
         const accent = isUnder ? "#00ff87" : isDog ? "#a78bfa" : "#fb7185";
@@ -1207,17 +1233,18 @@ function OutTheParkCard({ parlay }) {
 }
 
 function WayOutTheParkCard({ parlay }) {
-  if (!parlay?.legs?.length) return null;
+  if (!parlay) return null;
+  const hasLegs = parlay.legs && parlay.legs.length > 0;
   return (
     <div style={{
       background: "linear-gradient(135deg, #0a0a0a 0%, #2d0014 50%, #200033 100%)",
-      border: "2px solid #ec4899", borderRadius: 10,
+      border: `2px solid ${hasLegs ? "#ec4899" : "#2a1020"}`, borderRadius: 10,
       padding: "18px 20px", marginBottom: 24,
-      boxShadow: "0 0 36px #ec489940",
+      boxShadow: hasLegs ? "0 0 36px #ec489940" : "none",
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: "#f9a8d4", letterSpacing: 3, fontWeight: 900 }}>
+          <div style={{ fontSize: 11, color: hasLegs ? "#f9a8d4" : "#555", letterSpacing: 3, fontWeight: 900 }}>
             🚀💥💥 WAY OUT THE PARK
           </div>
           <div style={{ fontSize: 9, color: "#888", marginTop: 4 }}>{parlay.note}</div>
@@ -1227,6 +1254,7 @@ function WayOutTheParkCard({ parlay }) {
             </div>
           )}
         </div>
+        {hasLegs && (
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 30, color: "#f9a8d4", fontWeight: 900, fontFamily: "monospace", textShadow: "0 0 16px #ec489960" }}>
             {parlay.combined_odds}
@@ -1235,8 +1263,10 @@ function WayOutTheParkCard({ parlay }) {
             ${parlay.payout_per_100?.toLocaleString()}/$100
           </div>
         </div>
+        )}
       </div>
 
+      {hasLegs && (
       <div style={{
         fontSize: 9, color: "#fbcfe8", marginBottom: 10, lineHeight: 1.5,
         padding: "10px 12px", background: "#ec489918", borderRadius: 4,
@@ -1246,8 +1276,18 @@ function WayOutTheParkCard({ parlay }) {
         Faves must <strong>WIN BY 3+</strong>. Dogs must <strong>WIN OUTRIGHT BY 2+</strong>.
         Unders need to clear by 2 full runs. Lottery-ticket payouts.
       </div>
+      )}
 
-      {parlay.legs.map((leg, i) => {
+      {!hasLegs && (
+        <div style={{
+          textAlign: "center", padding: "20px 0", color: "#444",
+          fontSize: 10, letterSpacing: 2, fontFamily: "monospace",
+        }}>
+          ⏳ WAITING FOR LINES — REFRESHES AUTOMATICALLY
+        </div>
+      )}
+
+      {hasLegs && parlay.legs.map((leg, i) => {
         const isUnder = leg.type === "WOTP_UNDER";
         const isDog = leg.type === "WOTP_DOG_RL";
         const accent = isUnder ? "#00ff87" : isDog ? "#a78bfa" : "#fb7185";

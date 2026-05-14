@@ -1798,22 +1798,24 @@ class AIPicksEngine:
                 "odds": self._prob_to_ml(prob / 100),
                 "reasoning": " · ".join(nrfi.get("key_factors", [])[:2]) or nrfi.get("verdict", ""),
             })
-        if len(candidates) < 3:
+        if not candidates:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
-                    "structure": "", "note": "Need 3+ NRFI candidates (60%+ probability)"}
+                    "structure": "", "note": "No NRFI qualifiers yet — updates as lines come in"}
         candidates.sort(key=lambda x: x["probability"], reverse=True)
         legs = candidates[:4]
+        rank_labels = ("LOCK", "STRONG", "LEAN", "DART")
         for i, leg in enumerate(legs, start=1):
             leg["rank"] = i
-            leg["rank_label"] = ("LOCK", "STRONG", "LEAN", "DART")[i-1]
+            leg["rank_label"] = rank_labels[i-1] if i <= len(rank_labels) else "DART"
         combined, payout = self._calc_parlay_odds([l["odds"] for l in legs])
         structure = " · ".join(f"#{l['rank']} 🥚 {l['matchup'].split(' @ ')[1].split()[-1]}" for l in legs)
+        partial = " — more games qualifying as odds open" if len(legs) < 4 else ""
         return {
             "legs": legs,
             "combined_odds": combined,
             "payout_per_100": round(payout * 100, 2),
             "structure": structure,
-            "note": f"{len(legs)}-leg NRFI stack — both starters hold scoreless 1st inning",
+            "note": f"{len(legs)}-leg NRFI stack — both starters hold scoreless 1st inning{partial}",
         }
 
     # ── F5 Under Parlay (First 5 innings) ────────────────────────────────────
@@ -1838,22 +1840,24 @@ class AIPicksEngine:
                 "odds": -120,
                 "reasoning": f"F5 score {score:.0f} — strong starter quality, no pen variance",
             })
-        if len(candidates) < 3:
+        if not candidates:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
-                    "structure": "", "note": "Need 3+ F5 under candidates (score 58+)"}
+                    "structure": "", "note": "No F5 qualifiers yet — updates as starting lineups post"}
         candidates.sort(key=lambda x: x["f5_score"], reverse=True)
         legs = candidates[:4]
+        rank_labels = ("LOCK", "STRONG", "LEAN", "DART")
         for i, leg in enumerate(legs, start=1):
             leg["rank"] = i
-            leg["rank_label"] = ("LOCK", "STRONG", "LEAN", "DART")[i-1]
+            leg["rank_label"] = rank_labels[i-1] if i <= len(rank_labels) else "DART"
         combined, payout = self._calc_parlay_odds([l["odds"] for l in legs])
         structure = " · ".join(f"#{l['rank']} 5️⃣U {l['matchup'].split(' @ ')[1].split()[-1]}" for l in legs)
+        partial = " — more games qualifying as lineups post" if len(legs) < 4 else ""
         return {
             "legs": legs,
             "combined_odds": combined,
             "payout_per_100": round(payout * 100, 2),
             "structure": structure,
-            "note": f"{len(legs)}-leg F5 UNDER stack — no bullpen risk, just elite starters",
+            "note": f"{len(legs)}-leg F5 UNDER stack — no bullpen risk, just elite starters{partial}",
         }
 
     # ── Team Total Parlay ────────────────────────────────────────────────────
@@ -1881,20 +1885,22 @@ class AIPicksEngine:
                 "odds": -115,
                 "reasoning": f"Team-total under {best_score:.0f} — {verdict}",
             })
-        if len(candidates) < 3:
+        if not candidates:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
-                    "structure": "", "note": "Need 3+ team-total candidates (score 60+)"}
+                    "structure": "", "note": "No team-total qualifiers yet — updates as team totals post"}
         candidates.sort(key=lambda x: x["tt_score"], reverse=True)
         legs = candidates[:4]
+        rank_labels = ("LOCK", "STRONG", "LEAN", "DART")
         for i, leg in enumerate(legs, start=1):
             leg["rank"] = i
-            leg["rank_label"] = ("LOCK", "STRONG", "LEAN", "DART")[i-1]
+            leg["rank_label"] = rank_labels[i-1] if i <= len(rank_labels) else "DART"
         combined, payout = self._calc_parlay_odds([l["odds"] for l in legs])
         structure = " · ".join(f"#{l['rank']} 🎯 {l['team'].split()[-1]} U" for l in legs)
+        partial = " — more games qualifying as team totals post" if len(legs) < 4 else ""
         return {
             "legs": legs,
             "combined_odds": combined,
             "payout_per_100": round(payout * 100, 2),
             "structure": structure,
-            "note": f"{len(legs)}-leg TEAM TOTAL stack — each team's individual scoring capped",
+            "note": f"{len(legs)}-leg TEAM TOTAL stack — each team's individual scoring capped{partial}",
         }
