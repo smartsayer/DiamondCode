@@ -1273,8 +1273,8 @@ function WayOutTheParkCard({ parlay }) {
         border: "1px solid #ec489940",
       }}>
         ☠️ THE WILDEST SWING ON THE BOARD — {parlay.wotp_amount}.
-        Faves must <strong>WIN BY 3+</strong>. Dogs must <strong>WIN OUTRIGHT BY 2+</strong>.
-        Unders need to clear by 2 full runs. Lottery-ticket payouts.
+        Faves must <strong>WIN BY 3+ runs</strong>. Unders need to clear by <strong>2 full runs</strong>.
+        Maximum chalk stretch. Lottery-ticket payouts.
       </div>
       )}
 

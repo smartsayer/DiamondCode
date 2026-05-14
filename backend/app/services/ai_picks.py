@@ -25,7 +25,7 @@ class AIPicksEngine:
         top_dogs = self._rank_dogs(clean)
         top_overs = self._rank_overs(clean)
         top_faves = self._rank_faves(clean)
-        broad_faves = self._rank_faves(clean, min_score=45)
+        broad_faves = self._rank_faves(clean, min_score=35)
         safe_play = self._identify_safe_play(clean, top_unders)
         parlay = self._build_smart_parlay(safe_play, top_unders, top_dogs, way_unders)
         power_parlay = self._build_power_parlay(top_overs, top_faves)
@@ -1180,34 +1180,13 @@ class AIPicksEngine:
                 "best_book": u.get("best_book"),
             })
 
-        # Dogs: skip OTP games, prefer lower-ranked dogs (tail of list = bigger underdogs)
-        # Reverse so worst dogs (highest payout) go first — maximises differentiation from OTP
-        for d in reversed(top_dogs):
-            if d["matchup"] in exclude:
-                continue
-            score = d.get("dog_score", 0)
-            conviction = score - 30
-            leg_odds = self._estimate_dog_rl_odds(d.get("moneyline"))
-            candidates.append({
-                "_conviction": conviction,
-                "type": "WOTP_DOG_RL",
-                "play": f"{d['dog_team']} -1.5 RL",
-                "matchup": d["matchup"],
-                "original_line": "+1.5 (cover)",
-                "moved_line": "-1.5 (win by 2+)",
-                "odds": leg_odds,
-                "difficulty": "Underdog must WIN OUTRIGHT BY 2+ runs",
-                "reasoning": " · ".join((d.get("reasons") or [])[:2]) if d.get("reasons") else d.get("verdict", ""),
-                "dog_team": d["dog_team"],
-                "best_book": d.get("best_book"),
-            })
-
-        # Faves at -2.5 RL — skip OTP games
+        # WOTP signature bet: FAVES at -2.5 RL (win by 3+) — structurally different from OTP's dogs
+        # Use broad_faves with a low threshold so this card always has content on any slate
         for f in top_faves:
-            if f["matchup"] in exclude:
-                continue
             score = f.get("fav_score", 0)
-            conviction = score - 32
+            if score < 35:
+                continue
+            conviction = score - 20
             leg_odds = self._estimate_fav_alt_rl_odds(f.get("moneyline"), self._WOTP_FAV_RUNS)
             candidates.append({
                 "_conviction": conviction,
@@ -1217,37 +1196,15 @@ class AIPicksEngine:
                 "original_line": "ML",
                 "moved_line": f"-{self._WOTP_FAV_RUNS} (win by 3+)",
                 "odds": leg_odds,
-                "difficulty": "Favorite must WIN BY 3+ runs (no late comeback by dog, no save situations)",
+                "difficulty": "Favorite must WIN BY 3+ runs",
                 "reasoning": " · ".join((f.get("reasons") or [])[:2]) if f.get("reasons") else f.get("verdict", ""),
                 "fav_team": f["fav_team"],
                 "best_book": f.get("best_book"),
             })
 
-        # If still not enough after exclusions, fall back to OTP games (last resort)
-        if len(candidates) < 4:
-            for d in top_dogs:
-                if d["matchup"] in {c["matchup"] for c in candidates}:
-                    continue
-                score = d.get("dog_score", 0)
-                conviction = score - 35  # extra penalty for overlap
-                leg_odds = self._estimate_dog_rl_odds(d.get("moneyline"))
-                candidates.append({
-                    "_conviction": conviction,
-                    "type": "WOTP_DOG_RL",
-                    "play": f"{d['dog_team']} -1.5 RL",
-                    "matchup": d["matchup"],
-                    "original_line": "+1.5 (cover)",
-                    "moved_line": "-1.5 (win by 2+)",
-                    "odds": leg_odds,
-                    "difficulty": "Underdog must WIN OUTRIGHT BY 2+ runs",
-                    "reasoning": " · ".join((d.get("reasons") or [])[:2]) if d.get("reasons") else d.get("verdict", ""),
-                    "dog_team": d["dog_team"],
-                    "best_book": d.get("best_book"),
-                })
-
         if not candidates:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
-                    "structure": "", "note": "No qualifying plays for Way Out The Park"}
+                    "structure": "", "note": "Not enough qualifiers yet — updates as lines come in"}
 
         # Rank by conviction descending
         candidates.sort(key=lambda x: x["_conviction"], reverse=True)
@@ -1289,9 +1246,9 @@ class AIPicksEngine:
             "legs": legs,
             "combined_odds": combined_american,
             "payout_per_100": round(payout * 100, 2),
-            "wotp_amount": "Faves -2.5 · Dogs -1.5 · Unders -2",
+            "wotp_amount": "Faves -2.5 RL · Unders -2 runs",
             "structure": " · ".join(structure_parts),
-            "note": f"{len(legs)}-leg WAY OUT THE PARK — faves win by 3+, unders drop 2, dogs win outright by 2+. The wildest swing.",
+            "note": f"{len(legs)}-leg WAY OUT THE PARK — favorites must win by 3+, unders drop 2 full runs. Maximum chalk stretch.",
         }
 
     # ── Longshot Parlay (high-EV legs, big payout) ───────────────────────────
