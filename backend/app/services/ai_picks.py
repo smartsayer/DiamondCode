@@ -470,7 +470,7 @@ class AIPicksEngine:
                 continue
             fav_side = "home" if actual_dog == "away" else "away"
             fav_team = g.get(f"{fav_side}_team")
-            fav_ml = ml.get(f"closing_{fav_side}_ml")
+            fav_ml = ml.get(f"closing_{fav_side}_ml") or ml.get(f"current_{fav_side}_ml")
 
             # Need a meaningful favorite line
             if fav_ml is None:
@@ -1605,7 +1605,7 @@ class AIPicksEngine:
 
             ml = g.get("moneyline_data", {}) or {}
             dog_team = g.get(f"{actual}_team")
-            dog_ml = ml.get(f"closing_{actual}_ml")
+            dog_ml = ml.get(f"closing_{actual}_ml") or ml.get(f"current_{actual}_ml")
 
             reasons = []
             if dog_score >= 75:
