@@ -1239,78 +1239,23 @@ class AIPicksEngine:
         exclude_matchups: Optional[set] = None,
     ) -> dict[str, Any]:
         """
-        WAY OUT THE PARK — the biggest swing on the slate.
-        Deliberately excludes games already used in OTP so the two parlays are distinct.
-          - Faves at -2.5 RL (must WIN BY 3+)
-          - Dogs at -1.5 RL lower-ranked tail (different games from OTP)
-          - Unders moved DOWN 2 runs; prioritises way_unders for uniqueness
-        Always 4 ranked legs, real per-leg American odds, real parlay math.
+        WAY OUT THE PARK — deliberately layered structure: 2 fave -2.5 RL anchors + 2 way-unders.
+        The layering is enforced: fave legs and under legs are selected independently
+        from the best of each type, then interleaved [fave, under, fave, under].
+        This guarantees the parlay always has 2 different bet types and tells a clear story.
         """
         exclude = exclude_matchups or set()
-        candidates: list[dict[str, Any]] = []
 
-        # Way-unders first (converging signals — highest confidence for -2 move)
-        for u in (way_unders or []):
-            if u["matchup"] in exclude:
+        # ── Layer A: FAVES at -2.5 RL — pick top 2 by fav_score ──────────────
+        fave_legs: list[dict[str, Any]] = []
+        used_fave: set[str] = set()
+        for f in sorted(top_faves, key=lambda x: x.get("fav_score", 0), reverse=True):
+            if f["matchup"] in exclude or f["matchup"] in used_fave:
                 continue
-            closing = u.get("closing_total")
-            if closing is None:
-                continue
-            moved = round(closing - self._WOTP_UNDER_RUNS, 1)
-            if moved < 4.0:
-                continue
-            score = u.get("under_score", 0)
-            conviction = score - 24  # way_unders have stronger signal → less penalty
-            leg_odds = self._estimate_moved_under_odds(closing, moved)
-            candidates.append({
-                "_conviction": conviction,
-                "type": "WOTP_UNDER",
-                "play": f"UNDER {moved}",
-                "matchup": u["matchup"],
-                "original_line": closing,
-                "moved_line": moved,
-                "odds": leg_odds,
-                "difficulty": f"Game must finish under {moved} ({self._WOTP_UNDER_RUNS} runs tougher than {closing})",
-                "reasoning": " · ".join((u.get("reasons") or [])[:2]) if u.get("reasons") else u.get("verdict", ""),
-                "best_book": u.get("best_book"),
-            })
-
-        # Remaining top_unders — skip games already in candidates or excluded from OTP
-        already_under = {c["matchup"] for c in candidates}
-        for u in top_unders:
-            if u["matchup"] in exclude or u["matchup"] in already_under:
-                continue
-            closing = u.get("closing_total")
-            if closing is None:
-                continue
-            moved = round(closing - self._WOTP_UNDER_RUNS, 1)
-            if moved < 4.0:
-                continue
-            score = u.get("under_score", 0)
-            conviction = score - 28
-            leg_odds = self._estimate_moved_under_odds(closing, moved)
-            candidates.append({
-                "_conviction": conviction,
-                "type": "WOTP_UNDER",
-                "play": f"UNDER {moved}",
-                "matchup": u["matchup"],
-                "original_line": closing,
-                "moved_line": moved,
-                "odds": leg_odds,
-                "difficulty": f"Game must finish under {moved} ({self._WOTP_UNDER_RUNS} runs tougher than {closing})",
-                "reasoning": " · ".join((u.get("reasons") or [])[:2]) if u.get("reasons") else u.get("verdict", ""),
-                "best_book": u.get("best_book"),
-            })
-
-        # WOTP signature bet: FAVES at -2.5 RL (win by 3+) — structurally different from OTP's dogs
-        for f in top_faves:
             if f.get("moneyline") is None:
                 continue
-            score = f.get("fav_score", 0)
-            conviction = score - 20
             leg_odds = self._estimate_fav_alt_rl_odds(f.get("moneyline"), self._WOTP_FAV_RUNS)
-            candidates.append({
-                "_conviction": conviction,
+            fave_legs.append({
                 "type": "WOTP_FAV_RL",
                 "play": f"{f['fav_team']} -{self._WOTP_FAV_RUNS} RL",
                 "matchup": f["matchup"],
@@ -1321,55 +1266,97 @@ class AIPicksEngine:
                 "reasoning": " · ".join((f.get("reasons") or [])[:2]) if f.get("reasons") else f.get("verdict", ""),
                 "fav_team": f["fav_team"],
                 "best_book": f.get("best_book"),
+                "_score": f.get("fav_score", 0),
             })
+            used_fave.add(f["matchup"])
+            if len(fave_legs) >= 2:
+                break
 
-        if not candidates:
+        # ── Layer B: UNDERS moved -2 runs — pick top 2 by under_score ─────────
+        under_legs: list[dict[str, Any]] = []
+        used_under: set[str] = set()
+        under_sources = list(way_unders or []) + [
+            u for u in top_unders if u["matchup"] not in {x["matchup"] for x in (way_unders or [])}
+        ]
+        for u in under_sources:
+            if u["matchup"] in exclude or u["matchup"] in used_under:
+                continue
+            if u["matchup"] in used_fave:
+                continue  # don't double-dip same game
+            closing = u.get("closing_total")
+            if closing is None:
+                continue
+            moved = round(closing - self._WOTP_UNDER_RUNS, 1)
+            if moved < 4.0:
+                continue
+            leg_odds = self._estimate_moved_under_odds(closing, moved)
+            under_legs.append({
+                "type": "WOTP_UNDER",
+                "play": f"UNDER {moved}",
+                "matchup": u["matchup"],
+                "original_line": closing,
+                "moved_line": moved,
+                "odds": leg_odds,
+                "difficulty": f"Game must finish under {moved} ({self._WOTP_UNDER_RUNS} runs tougher than {closing})",
+                "reasoning": " · ".join((u.get("reasons") or [])[:2]) if u.get("reasons") else u.get("verdict", ""),
+                "best_book": u.get("best_book"),
+                "_score": u.get("under_score", 0),
+            })
+            used_under.add(u["matchup"])
+            if len(under_legs) >= 2:
+                break
+
+        if not fave_legs and not under_legs:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
                     "structure": "", "note": "Not enough qualifiers yet — updates as lines come in"}
 
-        # Rank by conviction descending
-        candidates.sort(key=lambda x: x["_conviction"], reverse=True)
-
+        # ── Interleave: fave → under → fave → under ───────────────────────────
+        # Fills whichever layers exist, up to 4 legs total
         legs: list[dict[str, Any]] = []
-        used: set[str] = set()
-        for c in candidates:
-            if c["matchup"] in used:
-                continue
-            legs.append(c)
-            used.add(c["matchup"])
-            if len(legs) >= 4:
+        fi, ui = 0, 0
+        for _ in range(4):
+            if fi < len(fave_legs) and (ui >= len(under_legs) or fi <= ui):
+                legs.append(fave_legs[fi]); fi += 1
+            elif ui < len(under_legs):
+                legs.append(under_legs[ui]); ui += 1
+            else:
                 break
 
-        # Stamp ranks 1-4 with vivid labels
+        # Stamp rank labels that reflect the layer role
+        _fave_labels = ["FAVE ANCHOR", "FAVE SUPPORT"]
+        _under_labels = ["UNDER LOCK", "UNDER HAMMER"]
+        fave_rank = under_rank = 0
         for i, leg in enumerate(legs, start=1):
             leg["rank"] = i
-            leg["rank_label"] = (
-                "BEST SHOT" if i == 1
-                else "STILL ALIVE" if i == 2
-                else "MOON SHOT" if i == 3
-                else "WAY OUT"
-            )
-            leg.pop("_conviction", None)
+            if leg["type"] == "WOTP_FAV_RL":
+                leg["rank_label"] = _fave_labels[fave_rank] if fave_rank < len(_fave_labels) else "FAVE"
+                fave_rank += 1
+            else:
+                leg["rank_label"] = _under_labels[under_rank] if under_rank < len(_under_labels) else "UNDER"
+                under_rank += 1
+            leg.pop("_score", None)
 
-        # Real parlay math
         combined_american, payout = self._calc_parlay_odds([l["odds"] for l in legs])
 
         structure_parts = []
         for l in legs:
             tag = (
-                f"🐕 {l.get('dog_team','').split()[-1]} -1.5" if l["type"] == "WOTP_DOG_RL"
-                else f"⭐ {l.get('fav_team','').split()[-1]} -2.5" if l["type"] == "WOTP_FAV_RL"
+                f"⭐ {l.get('fav_team','').split()[-1]} -2.5" if l["type"] == "WOTP_FAV_RL"
                 else "📉 U-2"
             )
             structure_parts.append(f"#{l['rank']} {tag}")
+
+        fave_count = sum(1 for l in legs if l["type"] == "WOTP_FAV_RL")
+        under_count = len(legs) - fave_count
+        layer_desc = f"{fave_count} Fave -2.5 RL · {under_count} Under -2 runs"
 
         return {
             "legs": legs,
             "combined_odds": combined_american,
             "payout_per_100": round(payout * 100, 2),
-            "wotp_amount": "Faves -2.5 RL · Unders -2 runs",
+            "wotp_amount": layer_desc,
             "structure": " · ".join(structure_parts),
-            "note": f"{len(legs)}-leg WAY OUT THE PARK — favorites must win by 3+, unders drop 2 full runs. Maximum chalk stretch.",
+            "note": f"{len(legs)}-leg WAY OUT THE PARK — layered: {fave_count} favorites win by 3+, {under_count} unders drop 2 full runs.",
         }
 
     # ── Longshot Parlay (high-EV legs, big payout) ───────────────────────────

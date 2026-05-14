@@ -1391,68 +1391,91 @@ function WayOutTheParkCard({ parlay }) {
         </div>
       )}
 
-      {hasLegs && parlay.legs.map((leg, i) => {
-        const isUnder = leg.type === "WOTP_UNDER";
-        const isDog = leg.type === "WOTP_DOG_RL";
-        const accent = isUnder ? "#00ff87" : isDog ? "#a78bfa" : "#fb7185";
-        const rank = leg.rank || (i + 1);
-        const rankColors = { 1: "#00ff87", 2: "#fbbf24", 3: "#fb923c", 4: "#ec4899" };
-        const rankColor = rankColors[rank] || "#666";
-        return (
-          <div key={i} style={{
-            borderTop: "1px solid #1a1a1a",
-            padding: "14px 0",
-            display: "flex", gap: 12, alignItems: "flex-start",
-          }}>
-            <div style={{ flexShrink: 0, textAlign: "center", minWidth: 36 }}>
-              <div style={{
-                width: 32, height: 32, borderRadius: "50%",
-                background: rankColor + "20", color: rankColor,
-                border: `2px solid ${rankColor}60`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 14, fontWeight: 900, margin: "0 auto",
-              }}>#{rank}</div>
-              <div style={{
-                fontSize: 7, color: rankColor, marginTop: 4,
-                fontFamily: "monospace", letterSpacing: 0.5, fontWeight: 700,
-                lineHeight: 1.1,
-              }}>
-                {leg.rank_label}
-              </div>
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 13, color: accent, fontWeight: 700 }}>{leg.play}</span>
-                <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
-                  {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
-                </span>
-                <span style={{ fontSize: 9, color: "#ec4899", fontFamily: "monospace" }}>
-                  was {leg.original_line}
-                </span>
-                {leg.best_book && (
-                  <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
-                )}
-              </div>
-              <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
-                {leg.matchup}
-              </div>
-              {leg.difficulty && (
+      {hasLegs && (() => {
+        // Group legs by layer for visual separation
+        const FAVE_COLOR = "#fb7185";
+        const UNDER_COLOR = "#00ff87";
+        let prevType = null;
+        return parlay.legs.map((leg, i) => {
+          const isUnder = leg.type === "WOTP_UNDER";
+          const legColor = isUnder ? UNDER_COLOR : FAVE_COLOR;
+          const rank = leg.rank || (i + 1);
+          // Show a layer divider when bet type switches
+          const showDivider = i > 0 && isUnder !== (prevType === "WOTP_UNDER");
+          prevType = leg.type;
+          return (
+            <div key={i}>
+              {showDivider && (
                 <div style={{
-                  fontSize: 9, color: "#fbcfe8", marginTop: 5, fontFamily: "monospace",
-                  fontStyle: "italic",
+                  display: "flex", alignItems: "center", gap: 8,
+                  margin: "6px 0", opacity: 0.5,
                 }}>
-                  ⚡ {leg.difficulty}
+                  <div style={{ flex: 1, height: 1, background: "linear-gradient(90deg, transparent, #ec4899, transparent)" }} />
+                  <span style={{ fontSize: 8, color: "#f9a8d4", fontFamily: "monospace", letterSpacing: 2, whiteSpace: "nowrap" }}>
+                    {isUnder ? "📉 UNDER LAYER" : "⭐ FAVE LAYER"}
+                  </span>
+                  <div style={{ flex: 1, height: 1, background: "linear-gradient(90deg, transparent, #ec4899, transparent)" }} />
                 </div>
               )}
-              {leg.reasoning && (
-                <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                  {leg.reasoning}
+              <div style={{
+                borderTop: i === 0 ? "1px solid #1a1a1a" : showDivider ? "none" : "1px solid #1a1a1a",
+                padding: "14px 0",
+                display: "flex", gap: 12, alignItems: "flex-start",
+                background: `${legColor}06`,
+                borderLeft: `2px solid ${legColor}30`,
+                paddingLeft: 10, borderRadius: "0 4px 4px 0", marginBottom: 2,
+              }}>
+                <div style={{ flexShrink: 0, textAlign: "center", minWidth: 36 }}>
+                  <div style={{
+                    width: 32, height: 32, borderRadius: "50%",
+                    background: legColor + "20", color: legColor,
+                    border: `2px solid ${legColor}60`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 14, fontWeight: 900, margin: "0 auto",
+                  }}>#{rank}</div>
+                  <div style={{
+                    fontSize: 7, color: legColor, marginTop: 4,
+                    fontFamily: "monospace", letterSpacing: 0.5, fontWeight: 700,
+                    lineHeight: 1.1,
+                  }}>
+                    {leg.rank_label}
+                  </div>
                 </div>
-              )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: legColor, fontWeight: 700 }}>{leg.play}</span>
+                    <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
+                      {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
+                    </span>
+                    <span style={{ fontSize: 9, color: "#ec4899", fontFamily: "monospace" }}>
+                      was {leg.original_line}
+                    </span>
+                    {leg.best_book && (
+                      <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
+                    {leg.matchup}
+                  </div>
+                  {leg.difficulty && (
+                    <div style={{
+                      fontSize: 9, color: "#fbcfe8", marginTop: 5, fontFamily: "monospace",
+                      fontStyle: "italic",
+                    }}>
+                      ⚡ {leg.difficulty}
+                    </div>
+                  )}
+                  {leg.reasoning && (
+                    <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                      {leg.reasoning}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        });
+      })()}
     </div>
   );
 }
