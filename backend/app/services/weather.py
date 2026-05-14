@@ -43,6 +43,10 @@ class WeatherService:
 
     async def get_game_weather(self, venue_id: int) -> dict[str, Any]:
         if venue_id in DOME_OR_RETRACTABLE:
+            # Domes are weather-neutral. No air, no wind, no signal.
+            # Returning 5.0 (true neutral) instead of 7.0 — refuse to fake
+            # influence we don't have. The model should not get free under
+            # credit for a controlled environment.
             return {
                 "venue_id": venue_id,
                 "is_dome": True,
@@ -51,7 +55,8 @@ class WeatherService:
                 "wind_dir_deg": 0,
                 "humidity_pct": 50,
                 "conditions": "Dome/Retractable",
-                "under_score": 7.0,
+                "under_score": 5.0,
+                "notes": "Dome — weather neutral (no signal)",
             }
 
         coords = STADIUM_COORDS.get(venue_id)
@@ -106,44 +111,53 @@ class WeatherService:
         humidity: float,
         conditions: str,
     ) -> float:
+        """
+        Threshold-gated weather scoring. Returns 5.0 (neutral) unless a condition
+        is SIGNIFICANT enough to justify moving the needle. Refuses to fake influence
+        on a calm 72°F day — the model should only earn weight when there's real signal.
+        """
         score = 5.0
+        signals = 0
 
-        # Temperature: cold suppresses offense
-        if temp_f < 50:
-            score += 2.5
-        elif temp_f < 60:
-            score += 1.5
-        elif temp_f < 70:
-            score += 0.5
-        elif temp_f > 85:
-            score -= 1.0
-        elif temp_f > 90:
-            score -= 1.5
+        # Temperature — only extremes move the score
+        if temp_f < 55:
+            score += 2.0 if temp_f < 48 else 1.2   # genuine cold suppression
+            signals += 1
+        elif temp_f > 88:
+            score -= 1.2 if temp_f > 93 else 0.8   # heat helps offense
+            signals += 1
+        # 55-88°F = neutral, no adjustment (don't fake influence)
 
-        # Wind: calculate whether blowing in or out relative to the batter's eye
-        # Batter hits toward CF; wind blowing toward home plate (into hitter) suppresses HR
-        angle_diff = abs((wind_dir_deg - orientation_deg + 360) % 360)
-        if angle_diff > 180:
-            angle_diff = 360 - angle_diff
+        # Wind — only when speed > 8mph AND blowing clear in/out
+        if wind_mph >= 8.0:
+            angle_diff = abs((wind_dir_deg - orientation_deg + 360) % 360)
+            if angle_diff > 180:
+                angle_diff = 360 - angle_diff
+            if angle_diff > 140:        # blowing IN (toward plate) = HR suppressed
+                score += min(wind_mph * 0.10, 2.2)
+                signals += 1
+            elif angle_diff < 40:       # blowing OUT to CF = HR-friendly
+                score -= min(wind_mph * 0.10, 2.2)
+                signals += 1
+            # crosswinds 40-140° = no clear directional effect, skip
 
-        # angle_diff near 180 = wind blowing in (toward home plate) = under-friendly
-        if angle_diff > 135:
-            wind_modifier = wind_mph * 0.08
-            score += min(wind_modifier, 2.0)
-        # angle_diff near 0 = blowing out to CF = over-friendly
-        elif angle_diff < 45:
-            wind_modifier = wind_mph * 0.08
-            score -= min(wind_modifier, 2.0)
+        # Humidity — only true extremes matter (ball carry physics)
+        if humidity > 78:
+            score += 0.6
+            signals += 1
+        elif humidity < 28:
+            score -= 0.6
+            signals += 1
 
-        # Humidity: high humidity = heavier ball, less carry
-        if humidity > 70:
-            score += 0.5
-        elif humidity < 30:
-            score -= 0.5
-
-        # Precipitation
+        # Precipitation — always significant when present
         if conditions in ("Rain", "Drizzle", "Thunderstorm"):
-            score += 1.0
+            score += 1.2
+            signals += 1
+
+        # If no condition was significant, the weather has no edge to offer.
+        # Lock to true neutral so we don't accidentally pile on micro-adjustments.
+        if signals == 0:
+            return 5.0
 
         return round(max(0.0, min(10.0, score)), 2)
 

@@ -1,4 +1,5 @@
 from typing import Any, Optional
+from app.services import pricing
 
 
 class AIPicksEngine:
@@ -47,6 +48,27 @@ class AIPicksEngine:
         def _strip(items):
             return [{k: v for k, v in item.items() if k != "_game"} for item in items]
 
+        # ── Edge enrichment: every leg gets fair odds, EV %, and tier ────────
+        under_lookup = {u["matchup"]: u for u in top_unders}
+        for w in way_unders:
+            under_lookup.setdefault(w["matchup"], w)
+        dog_lookup = {d["matchup"]: d for d in top_dogs}
+        fave_lookup = {f["matchup"]: f for f in broad_faves}
+
+        all_parlays = {
+            "parlay": parlay,
+            "power_parlay": power_parlay,
+            "already_winning_parlay": already_winning_parlay,
+            "out_the_park_parlay": out_the_park_parlay,
+            "way_out_the_park_parlay": way_out_the_park_parlay,
+            "nrfi_parlay": nrfi_parlay,
+            "f5_under_parlay": f5_under_parlay,
+            "team_total_parlay": team_total_parlay,
+        }
+        for _name, p in all_parlays.items():
+            if p:
+                self._enrich_parlay_edges(p, under_lookup, dog_lookup, fave_lookup)
+
         return {
             "safe_play": _strip([safe_play])[0] if safe_play else None,
             "top_unders": _strip(top_unders[:5]),
@@ -68,6 +90,100 @@ class AIPicksEngine:
             "flagged_lines": flagged,
             "total_preview_games": len(preview),
         }
+
+    # ── Edge / EV enrichment ─────────────────────────────────────────────────
+
+    def _enrich_parlay_edges(
+        self,
+        parlay: dict,
+        under_lookup: dict,
+        dog_lookup: dict,
+        fave_lookup: dict,
+    ) -> None:
+        """
+        Walks each leg of a parlay, computes our model's probability for that bet,
+        and attaches an `edge` dict (fair_odds, market_odds, edge_pct, tier).
+        Also computes a parlay-level edge from the joint model probability.
+        """
+        legs = parlay.get("legs") or []
+        if not legs:
+            return
+
+        joint_our_prob = 1.0
+        any_priced = False
+
+        for leg in legs:
+            t = leg.get("type", "")
+            matchup = leg.get("matchup", "")
+            market_odds = leg.get("odds")
+            our_prob: Optional[float] = None
+
+            # UNDER family (regular, way under, F5, NRFI, OTP, WOTP team-total, etc.)
+            if "UNDER" in t or t == "F5_UNDER" or t == "NRFI" or t == "TEAM_TOTAL":
+                u = under_lookup.get(matchup)
+                if u:
+                    base_score = u.get("under_score", 50)
+                    p = pricing.under_prob_from_score(base_score)
+                    # Penalize moved-line unders (less likely than spot under)
+                    if t in ("OTP_UNDER",):
+                        p -= 0.08   # -1.5 runs moved
+                    elif t in ("WOTP_UNDER",):
+                        p -= 0.13   # -2.0 runs moved
+                    our_prob = max(0.20, min(0.80, p))
+                elif t in ("NRFI", "F5_UNDER", "TEAM_TOTAL"):
+                    our_prob = 0.55  # baseline for these niche unders when no score
+
+            # FAVE run-line covers
+            elif t in ("OTP_FAV_RL", "WOTP_FAV_RL"):
+                f = fave_lookup.get(matchup)
+                if f:
+                    rl_runs = 1.5 if t == "OTP_FAV_RL" else 2.5
+                    our_prob = pricing.fav_cover_prob_from_score(
+                        f.get("fav_score", 50), f.get("moneyline"), rl_runs
+                    )
+
+            # DOG -1.5 (win outright by 2+)
+            elif t in ("OTP_DOG_RL", "WOTP_DOG_RL"):
+                d = dog_lookup.get(matchup)
+                if d:
+                    win_p = pricing.dog_win_prob_from_score(
+                        d.get("dog_score", 50), d.get("moneyline")
+                    )
+                    our_prob = win_p * 0.55   # ~55% of wins are by 2+
+
+            # DOG +1.5 cover (Already Winning)
+            elif t == "AW_DOG_RL":
+                d = dog_lookup.get(matchup)
+                if d:
+                    base = pricing.dog_rl_cover_prob_from_ml(d.get("moneyline"))
+                    score_adj = (d.get("dog_score", 50) - 50) * 0.0010
+                    our_prob = max(0.50, min(0.92, base + score_adj))
+
+            # DOG straight ML
+            elif t == "ML":
+                d = dog_lookup.get(matchup)
+                if d:
+                    our_prob = pricing.dog_win_prob_from_score(
+                        d.get("dog_score", 50), d.get("moneyline")
+                    )
+
+            # Apply the edge bundle
+            if our_prob is not None:
+                leg["edge"] = pricing.price_leg(our_prob, market_odds)
+                joint_our_prob *= our_prob
+                any_priced = True
+            else:
+                leg["edge"] = {"tier": "UNPRICED", "edge_pct": None, "color": "#666", "icon": "❓"}
+
+        # ── Parlay-level edge ────────────────────────────────────────────────
+        if any_priced:
+            combined_str = parlay.get("combined_odds", "")
+            try:
+                cleaned = str(combined_str).replace("+", "").replace("−", "-")
+                combined_int = int(cleaned)
+                parlay["parlay_edge"] = pricing.price_leg(joint_our_prob, combined_int)
+            except (ValueError, AttributeError, TypeError):
+                pass
 
     # ── Suspicious line detection ────────────────────────────────────────────
 

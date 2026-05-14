@@ -68,6 +68,26 @@ function Badge({ text, color }) {
   );
 }
 
+// Edge chip — visible on every priced leg: tier (CRUSH/EDGE/FAIR/PASS) + EV%
+function EdgeChip({ edge, size = "sm" }) {
+  if (!edge || edge.tier === "UNPRICED") return null;
+  const fs = size === "lg" ? 11 : 9;
+  const pad = size === "lg" ? "3px 9px" : "2px 6px";
+  const pct = edge.edge_pct;
+  return (
+    <span style={{
+      background: edge.color + "20",
+      border: `1px solid ${edge.color}70`,
+      color: edge.color,
+      fontSize: fs, fontFamily: "monospace", letterSpacing: 1,
+      padding: pad, borderRadius: 3, fontWeight: 700,
+      whiteSpace: "nowrap",
+    }} title={`Our prob ${(edge.our_prob*100).toFixed(1)}% · Fair odds ${edge.our_fair_odds > 0 ? '+' : ''}${edge.our_fair_odds}`}>
+      {edge.icon} {edge.tier}{pct != null ? ` ${pct > 0 ? '+' : ''}${pct}%` : ''}
+    </span>
+  );
+}
+
 function OddsChip({ label, value, color = "#888", subtitle }) {
   return (
     <div style={{
@@ -860,6 +880,7 @@ function ParlayCard({ parlay, title, accentColor, icon }) {
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 13, color: "#fff", fontWeight: 700 }}>{leg.play}</span>
                 <span style={{ color: "#555", fontWeight: 400, fontSize: 10 }}>{americanOdds(leg.odds)}</span>
+                <EdgeChip edge={leg.edge} />
                 {leg.implied_pct != null && (
                   <span style={{ color: "#888", fontSize: 9 }}>({leg.implied_pct}% implied)</span>
                 )}
@@ -1011,6 +1032,7 @@ function AlreadyWinningCard({ parlay }) {
                     {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
                   </span>
                 )}
+                <EdgeChip edge={leg.edge} />
                 {leg.best_book && (
                   <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
                 )}
@@ -1326,6 +1348,7 @@ function OutTheParkCard({ parlay }) {
                         {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
                       </span>
                     )}
+                    <EdgeChip edge={leg.edge} />
                     <span style={{ fontSize: 9, color: "#e879f9", fontFamily: "monospace" }}>
                       was {leg.original_line}
                     </span>
@@ -1470,6 +1493,7 @@ function WayOutTheParkCard({ parlay }) {
                     <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
                       {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
                     </span>
+                    <EdgeChip edge={leg.edge} />
                     <span style={{ fontSize: 9, color: "#ec4899", fontFamily: "monospace" }}>
                       was {leg.original_line}
                     </span>
