@@ -1134,6 +1134,8 @@ class AIPicksEngine:
 
         # Faves at -1.5 RL listed BEFORE dogs so they rank higher in conviction sort
         for f in top_faves:
+            if f.get("moneyline") is None:
+                continue
             score = f.get("fav_score", 0)
             conviction = score - 18
             leg_odds = self._estimate_fav_rl_odds(f.get("moneyline"))
@@ -1153,8 +1155,9 @@ class AIPicksEngine:
 
         # Dogs at -1.5 RL — must win outright by 2+ (longshot tier)
         for d in top_dogs:
+            if d.get("moneyline") is None:
+                continue  # skip — no real ML data, odds would be fake
             score = d.get("dog_score", 0)
-            # Brutal jump from "cover +1.5" to "win by 2+": 30 point penalty
             conviction = score - 30
             leg_odds = self._estimate_dog_rl_odds(d.get("moneyline"))
             candidates.append({
@@ -1173,7 +1176,7 @@ class AIPicksEngine:
 
         if not candidates:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
-                    "structure": "", "note": "No qualifying plays for Out The Park",
+                    "structure": "", "note": "Not enough qualifiers yet — updates as lines come in",
                     "otp_amount": f"{self._OUT_THE_PARK_AMOUNT} runs"}
 
         # Rank by conviction descending
@@ -1301,6 +1304,8 @@ class AIPicksEngine:
 
         # WOTP signature bet: FAVES at -2.5 RL (win by 3+) — structurally different from OTP's dogs
         for f in top_faves:
+            if f.get("moneyline") is None:
+                continue
             score = f.get("fav_score", 0)
             conviction = score - 20
             leg_odds = self._estimate_fav_alt_rl_odds(f.get("moneyline"), self._WOTP_FAV_RUNS)
