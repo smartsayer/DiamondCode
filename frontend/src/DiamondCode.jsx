@@ -1753,7 +1753,7 @@ function AIBoard({ aiPicks, allGames }) {
     top_overs = [], top_faves = [], parlay = {}, power_parlay = {},
     out_the_park_parlay = {}, way_out_the_park_parlay = {},
     already_winning_parlay = {},
-    nrfi_parlay = {}, f5_under_parlay = {}, team_total_parlay = {},
+    nrfi_parlay = {}, f5_under_parlay = {},
     best_edge_parlay = {},
     rankings = [], watch_list = [], skip_list = [], flagged_lines = [],
   } = aiPicks;
@@ -1854,9 +1854,6 @@ function AIBoard({ aiPicks, allGames }) {
 
       {/* F5 UNDER PARLAY (First 5 innings) */}
       <ParlayCard parlay={f5_under_parlay} title="F5 UNDER PARLAY — NO BULLPEN RISK" accentColor="#60a5fa" icon="5️⃣" />
-
-      {/* TEAM TOTAL PARLAY */}
-      <ParlayCard parlay={team_total_parlay} title="TEAM TOTAL PARLAY — INDIVIDUAL CAPS" accentColor="#34d399" icon="🎯" />
 
       {/* OUT THE PARK PARLAY (extreme reverse tease — 1.5 runs against you) */}
       <OutTheParkCard parlay={out_the_park_parlay} />

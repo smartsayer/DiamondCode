@@ -40,7 +40,6 @@ class AIPicksEngine:
         already_winning_parlay = self._build_already_winning_parlay(top_dogs, top_unders)
         nrfi_parlay = self._build_nrfi_parlay(clean)
         f5_under_parlay = self._build_f5_under_parlay(clean)
-        team_total_parlay = self._build_team_total_parlay(clean)
         best_edge_parlay = self._build_best_edge_parlay(top_unders, top_dogs, broad_faves)
         rankings = self._rank_full_board(preview, flagged_pks)
         watch_list = self._build_watch_list(clean)
@@ -64,7 +63,6 @@ class AIPicksEngine:
             "way_out_the_park_parlay": way_out_the_park_parlay,
             "nrfi_parlay": nrfi_parlay,
             "f5_under_parlay": f5_under_parlay,
-            "team_total_parlay": team_total_parlay,
             # best_edge_parlay builds its own edges — skip re-enrichment
         }
         for _name, p in all_parlays.items():
@@ -88,7 +86,6 @@ class AIPicksEngine:
             "way_out_the_park_parlay": way_out_the_park_parlay,
             "nrfi_parlay": nrfi_parlay,
             "f5_under_parlay": f5_under_parlay,
-            "team_total_parlay": team_total_parlay,
             "best_edge_parlay": best_edge_parlay,
             "rankings": rankings,
             "watch_list": watch_list,
@@ -2165,7 +2162,6 @@ class AIPicksEngine:
             "way_out_the_park_parlay": empty_parlay,
             "nrfi_parlay": empty_parlay,
             "f5_under_parlay": empty_parlay,
-            "team_total_parlay": empty_parlay,
             "best_edge_parlay": empty_parlay,
             "rankings": [],
             "watch_list": [],
