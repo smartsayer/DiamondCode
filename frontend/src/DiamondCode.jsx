@@ -1931,6 +1931,19 @@ export default function DiamondCode() {
     const id = setInterval(() => { fetchSlate(); }, 30000);
     return () => clearInterval(id);
   }, [allGames]);
+
+  // New-day detection: refetch when tab regains focus or once a minute if date has rolled over
+  useEffect(() => {
+    let lastDate = new Date().toISOString().slice(0, 10);
+    const checkNewDay = () => {
+      const today = new Date().toISOString().slice(0, 10);
+      if (today !== lastDate) { lastDate = today; fetchSlate(); }
+    };
+    const onVisibility = () => { if (document.visibilityState === "visible") checkNewDay(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    const id = setInterval(checkNewDay, 60000);
+    return () => { document.removeEventListener("visibilitychange", onVisibility); clearInterval(id); };
+  }, []);
   const locks = allGames.filter(g => g.total_score >= 80);
   const strong = allGames.filter(g => g.total_score >= 65 && g.total_score < 80);
   const doubleLocks = allGames.filter(g => g.correlation?.is_double_lock);
