@@ -4,6 +4,7 @@ import os
 from datetime import date
 from typing import Any, Optional
 from app.config import get_settings
+from app.services.free_odds import fetch_free_odds
 
 settings = get_settings()
 
@@ -56,27 +57,36 @@ class LineMovementService:
             LineMovementService._cache_loaded = True
 
     async def get_current_totals(self) -> list[dict[str, Any]]:
-        """Fetch current MLB totals + moneylines from The Odds API (one call)."""
-        if not settings.odds_api_key:
-            return []
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    f"{self.BASE}/sports/{self.SPORT}/odds",
-                    params={
-                        "apiKey": settings.odds_api_key,
-                        "regions": "us",
-                        "markets": "totals,h2h",
-                        "oddsFormat": "american",
-                        "dateFormat": "iso",
-                        "bookmakers": ",".join(SHARP_BOOK_PRIORITY),
-                    },
-                )
-                if resp.status_code != 200:
-                    return []
-                return resp.json()
-        except httpx.RequestError:
-            return []
+        """
+        Fetch current MLB totals + moneylines.
+        Primary: The Odds API (sharp book data, counts against quota).
+        Fallback: Action Network + ESPN public APIs (free, no key needed).
+        """
+        # Try Odds API first if we have a key
+        if settings.odds_api_key:
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(
+                        f"{self.BASE}/sports/{self.SPORT}/odds",
+                        params={
+                            "apiKey": settings.odds_api_key,
+                            "regions": "us",
+                            "markets": "totals,h2h",
+                            "oddsFormat": "american",
+                            "dateFormat": "iso",
+                            "bookmakers": ",".join(SHARP_BOOK_PRIORITY),
+                        },
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data:  # Non-empty = quota still good
+                            return data
+                    # 401/402/422 = quota exhausted or bad key — fall through to free sources
+            except httpx.RequestError:
+                pass  # Network error — fall through
+
+        # Free fallback: Action Network → ESPN
+        return await fetch_free_odds()
 
     def parse_movement(
         self,
