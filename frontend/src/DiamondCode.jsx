@@ -1236,12 +1236,12 @@ function PleaserCard({ parlay }) {
 }
 
 function ParlayCalculator() {
-  const [legs, setLegs] = React.useState([
+  const [legs, setLegs] = useState([
     { id: 1, label: "", odds: "" },
     { id: 2, label: "", odds: "" },
   ]);
-  const [wager, setWager] = React.useState("100");
-  const [nextId, setNextId] = React.useState(3);
+  const [wager, setWager] = useState("100");
+  const [nextId, setNextId] = useState(3);
 
   const parseOdds = (raw) => {
     const s = String(raw).trim().replace(/\s/g, "");
