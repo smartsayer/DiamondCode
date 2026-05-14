@@ -1352,8 +1352,8 @@ function AIBoard({ aiPicks, allGames }) {
   const {
     safe_play, top_unders = [], way_under_candidates = [], top_dogs = [],
     top_overs = [], top_faves = [], parlay = {}, power_parlay = {},
-    tease_parlay = {}, pleaser_parlay = {}, out_the_park_parlay = {},
-    way_out_the_park_parlay = {}, longshot_parlay = {},
+    out_the_park_parlay = {}, way_out_the_park_parlay = {},
+    nrfi_parlay = {}, f5_under_parlay = {}, team_total_parlay = {},
     rankings = [], watch_list = [], skip_list = [], flagged_lines = [],
   } = aiPicks;
 
@@ -1442,20 +1442,20 @@ function AIBoard({ aiPicks, allGames }) {
       {/* POWER PARLAY (overs + faves) */}
       <ParlayCard parlay={power_parlay} title="POWER PARLAY — OVERS + FAVES" accentColor="#fb7185" icon="💪" />
 
-      {/* TEASE PARLAY (1-run teaser, unders + dogs) */}
-      <TeaseCard parlay={tease_parlay} />
+      {/* NRFI PARLAY (No Run First Inning) */}
+      <ParlayCard parlay={nrfi_parlay} title="NRFI PARLAY — STACKED 1ST INNING UNDERS" accentColor="#facc15" icon="🥚" />
 
-      {/* PLEASER PARLAY (reverse teaser — lines moved against you, huge payout) */}
-      <PleaserCard parlay={pleaser_parlay} />
+      {/* F5 UNDER PARLAY (First 5 innings) */}
+      <ParlayCard parlay={f5_under_parlay} title="F5 UNDER PARLAY — NO BULLPEN RISK" accentColor="#60a5fa" icon="5️⃣" />
 
-      {/* OUT THE PARK PARLAY (extreme reverse tease — minimum 1.5 runs against you) */}
+      {/* TEAM TOTAL PARLAY */}
+      <ParlayCard parlay={team_total_parlay} title="TEAM TOTAL PARLAY — INDIVIDUAL CAPS" accentColor="#34d399" icon="🎯" />
+
+      {/* OUT THE PARK PARLAY (extreme reverse tease — 1.5 runs against you) */}
       <OutTheParkCard parlay={out_the_park_parlay} />
 
       {/* WAY OUT THE PARK (faves -2.5, dogs -1.5, unders -2 — wildest swing) */}
       <WayOutTheParkCard parlay={way_out_the_park_parlay} />
-
-      {/* LONGSHOT PARLAY (big payout chase) */}
-      <ParlayCard parlay={longshot_parlay} title="LONGSHOT PARLAY — CHASE THE BAG" accentColor="#22d3ee" icon="🚀" />
 
       {/* WAY UNDER candidates */}
       {way_under_candidates.length > 0 && (
@@ -1775,6 +1775,14 @@ export default function DiamondCode() {
   useEffect(() => { fetchSlate(); }, [dateOffset]);
 
   const allGames = slate?.games ?? [];
+
+  // Auto-refresh every 30s when games are live (in-progress)
+  useEffect(() => {
+    const hasLive = allGames.some(g => g.abstract_state === "Live");
+    if (!hasLive) return;
+    const id = setInterval(() => { fetchSlate(); }, 30000);
+    return () => clearInterval(id);
+  }, [allGames]);
   const locks = allGames.filter(g => g.total_score >= 80);
   const strong = allGames.filter(g => g.total_score >= 65 && g.total_score < 80);
   const doubleLocks = allGames.filter(g => g.correlation?.is_double_lock);

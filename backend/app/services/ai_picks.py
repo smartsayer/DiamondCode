@@ -25,16 +25,15 @@ class AIPicksEngine:
         top_dogs = self._rank_dogs(clean)
         top_overs = self._rank_overs(clean)
         top_faves = self._rank_faves(clean)
-        # Broader fave pool for extreme parlays — lower threshold so OTP/WOTP have fave candidates
         broad_faves = self._rank_faves(clean, min_score=45)
         safe_play = self._identify_safe_play(clean, top_unders)
         parlay = self._build_smart_parlay(safe_play, top_unders, top_dogs, way_unders)
         power_parlay = self._build_power_parlay(top_overs, top_faves)
-        tease_parlay = self._build_tease_parlay(top_unders, top_dogs)
-        pleaser_parlay = self._build_pleaser_parlay(top_unders, top_dogs, top_faves)
         out_the_park_parlay = self._build_out_the_park_parlay(top_unders, top_dogs, broad_faves)
         way_out_the_park_parlay = self._build_way_out_the_park_parlay(top_unders, top_dogs, broad_faves)
-        longshot_parlay = self._build_longshot_parlay(top_dogs, way_unders, top_unders, top_overs)
+        nrfi_parlay = self._build_nrfi_parlay(clean)
+        f5_under_parlay = self._build_f5_under_parlay(clean)
+        team_total_parlay = self._build_team_total_parlay(clean)
         rankings = self._rank_full_board(preview, flagged_pks)
         watch_list = self._build_watch_list(clean)
         skip_list = self._build_skip_list(clean)
@@ -51,11 +50,11 @@ class AIPicksEngine:
             "top_faves": _strip(top_faves[:5]),
             "parlay": parlay,
             "power_parlay": power_parlay,
-            "tease_parlay": tease_parlay,
-            "pleaser_parlay": pleaser_parlay,
             "out_the_park_parlay": out_the_park_parlay,
             "way_out_the_park_parlay": way_out_the_park_parlay,
-            "longshot_parlay": longshot_parlay,
+            "nrfi_parlay": nrfi_parlay,
+            "f5_under_parlay": f5_under_parlay,
+            "team_total_parlay": team_total_parlay,
             "rankings": rankings,
             "watch_list": watch_list,
             "skip_list": skip_list,
@@ -1698,20 +1697,141 @@ class AIPicksEngine:
         return f"{round(-100 / payout)}", payout
 
     def _empty(self) -> dict[str, Any]:
+        empty_parlay = {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""}
         return {
             "safe_play": None,
             "top_unders": [], "way_under_candidates": [], "top_dogs": [],
             "top_overs": [], "top_faves": [],
-            "parlay": {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""},
-            "power_parlay": {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""},
-            "tease_parlay": {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""},
-            "pleaser_parlay": {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""},
-            "out_the_park_parlay": {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""},
-            "way_out_the_park_parlay": {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""},
-            "longshot_parlay": {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""},
+            "parlay": empty_parlay,
+            "power_parlay": empty_parlay,
+            "out_the_park_parlay": empty_parlay,
+            "way_out_the_park_parlay": empty_parlay,
+            "nrfi_parlay": empty_parlay,
+            "f5_under_parlay": empty_parlay,
+            "team_total_parlay": empty_parlay,
             "rankings": [],
             "watch_list": [],
             "skip_list": [],
             "flagged_lines": [],
             "total_preview_games": 0,
+        }
+
+    # ── NRFI Parlay (No Run First Inning) ────────────────────────────────────
+
+    def _build_nrfi_parlay(self, games: list[dict[str, Any]]) -> dict[str, Any]:
+        """4 NRFIs stacked. Each leg ~62-65% to hit. Pays roughly +900-1500."""
+        candidates = []
+        for g in games:
+            nrfi = g.get("nrfi") or {}
+            prob = nrfi.get("nrfi_probability", 0)
+            if prob < 60:
+                continue
+            candidates.append({
+                "game_pk": g.get("game_pk"),
+                "matchup": f"{g.get('away_team')} @ {g.get('home_team')}",
+                "play": "NRFI (No Run 1st Inning)",
+                "type": "NRFI",
+                "probability": prob,
+                "odds": self._prob_to_ml(prob / 100),
+                "reasoning": " · ".join(nrfi.get("key_factors", [])[:2]) or nrfi.get("verdict", ""),
+            })
+        if len(candidates) < 3:
+            return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
+                    "structure": "", "note": "Need 3+ NRFI candidates (60%+ probability)"}
+        candidates.sort(key=lambda x: x["probability"], reverse=True)
+        legs = candidates[:4]
+        for i, leg in enumerate(legs, start=1):
+            leg["rank"] = i
+            leg["rank_label"] = ("LOCK", "STRONG", "LEAN", "DART")[i-1]
+        combined, payout = self._calc_parlay_odds([l["odds"] for l in legs])
+        structure = " · ".join(f"#{l['rank']} 🥚 {l['matchup'].split(' @ ')[1].split()[-1]}" for l in legs)
+        return {
+            "legs": legs,
+            "combined_odds": combined,
+            "payout_per_100": round(payout * 100, 2),
+            "structure": structure,
+            "note": f"{len(legs)}-leg NRFI stack — both starters hold scoreless 1st inning",
+        }
+
+    # ── F5 Under Parlay (First 5 innings) ────────────────────────────────────
+
+    def _build_f5_under_parlay(self, games: list[dict[str, Any]]) -> dict[str, Any]:
+        """First-5-inning unders — no bullpen risk, only starter quality matters. Pays ~+800-2000."""
+        candidates = []
+        for g in games:
+            f5 = g.get("f5") or {}
+            score = f5.get("f5_score", 0)
+            if score < 58:
+                continue
+            projected = f5.get("projected_f5_line")
+            line_str = f"F5 UNDER {projected}" if projected else "F5 UNDER (line TBD)"
+            candidates.append({
+                "game_pk": g.get("game_pk"),
+                "matchup": f"{g.get('away_team')} @ {g.get('home_team')}",
+                "play": line_str,
+                "type": "F5_UNDER",
+                "f5_score": score,
+                "verdict": f5.get("verdict"),
+                "odds": -120,
+                "reasoning": f"F5 score {score:.0f} — strong starter quality, no pen variance",
+            })
+        if len(candidates) < 3:
+            return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
+                    "structure": "", "note": "Need 3+ F5 under candidates (score 58+)"}
+        candidates.sort(key=lambda x: x["f5_score"], reverse=True)
+        legs = candidates[:4]
+        for i, leg in enumerate(legs, start=1):
+            leg["rank"] = i
+            leg["rank_label"] = ("LOCK", "STRONG", "LEAN", "DART")[i-1]
+        combined, payout = self._calc_parlay_odds([l["odds"] for l in legs])
+        structure = " · ".join(f"#{l['rank']} 5️⃣U {l['matchup'].split(' @ ')[1].split()[-1]}" for l in legs)
+        return {
+            "legs": legs,
+            "combined_odds": combined,
+            "payout_per_100": round(payout * 100, 2),
+            "structure": structure,
+            "note": f"{len(legs)}-leg F5 UNDER stack — no bullpen risk, just elite starters",
+        }
+
+    # ── Team Total Parlay ────────────────────────────────────────────────────
+
+    def _build_team_total_parlay(self, games: list[dict[str, Any]]) -> dict[str, Any]:
+        """Stack team unders/overs. Each team total leg is independent variance — high payout."""
+        candidates = []
+        for g in games:
+            tt = g.get("team_totals") or {}
+            best_score = tt.get("best_score", 0)
+            if best_score < 60:
+                continue
+            best_team = tt.get("best_team", "")
+            verdict = tt.get("best_verdict", "")
+            projected = tt.get("best_projected_total")
+            line_str = f"{best_team} UNDER {projected}" if projected else f"{best_team} TT UNDER"
+            candidates.append({
+                "game_pk": g.get("game_pk"),
+                "matchup": f"{g.get('away_team')} @ {g.get('home_team')}",
+                "play": line_str,
+                "type": "TEAM_TOTAL_UNDER",
+                "tt_score": best_score,
+                "verdict": verdict,
+                "team": best_team,
+                "odds": -115,
+                "reasoning": f"Team-total under {best_score:.0f} — {verdict}",
+            })
+        if len(candidates) < 3:
+            return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
+                    "structure": "", "note": "Need 3+ team-total candidates (score 60+)"}
+        candidates.sort(key=lambda x: x["tt_score"], reverse=True)
+        legs = candidates[:4]
+        for i, leg in enumerate(legs, start=1):
+            leg["rank"] = i
+            leg["rank_label"] = ("LOCK", "STRONG", "LEAN", "DART")[i-1]
+        combined, payout = self._calc_parlay_odds([l["odds"] for l in legs])
+        structure = " · ".join(f"#{l['rank']} 🎯 {l['team'].split()[-1]} U" for l in legs)
+        return {
+            "legs": legs,
+            "combined_odds": combined,
+            "payout_per_100": round(payout * 100, 2),
+            "structure": structure,
+            "note": f"{len(legs)}-leg TEAM TOTAL stack — each team's individual scoring capped",
         }
