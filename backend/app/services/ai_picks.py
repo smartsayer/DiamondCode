@@ -25,13 +25,15 @@ class AIPicksEngine:
         top_dogs = self._rank_dogs(clean)
         top_overs = self._rank_overs(clean)
         top_faves = self._rank_faves(clean)
+        # Broader fave pool for extreme parlays — lower threshold so OTP/WOTP have fave candidates
+        broad_faves = self._rank_faves(clean, min_score=45)
         safe_play = self._identify_safe_play(clean, top_unders)
         parlay = self._build_smart_parlay(safe_play, top_unders, top_dogs, way_unders)
         power_parlay = self._build_power_parlay(top_overs, top_faves)
         tease_parlay = self._build_tease_parlay(top_unders, top_dogs)
         pleaser_parlay = self._build_pleaser_parlay(top_unders, top_dogs, top_faves)
-        out_the_park_parlay = self._build_out_the_park_parlay(top_unders, top_dogs, top_faves)
-        way_out_the_park_parlay = self._build_way_out_the_park_parlay(top_unders, top_dogs, top_faves)
+        out_the_park_parlay = self._build_out_the_park_parlay(top_unders, top_dogs, broad_faves)
+        way_out_the_park_parlay = self._build_way_out_the_park_parlay(top_unders, top_dogs, broad_faves)
         longshot_parlay = self._build_longshot_parlay(top_dogs, way_unders, top_unders, top_overs)
         rankings = self._rank_full_board(preview, flagged_pks)
         watch_list = self._build_watch_list(clean)
@@ -453,7 +455,7 @@ class AIPicksEngine:
 
     # ── Favorite recommendations ─────────────────────────────────────────────
 
-    def _rank_faves(self, games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _rank_faves(self, games: list[dict[str, Any]], min_score: float = 55) -> list[dict[str, Any]]:
         """Strong favorite plays — bet the chalk when the edge is real."""
         recs = []
         for g in games:
@@ -524,7 +526,7 @@ class AIPicksEngine:
                 fav_score -= 8
 
             fav_score = max(0.0, min(100.0, fav_score))
-            if fav_score < 55:
+            if fav_score < min_score:
                 continue
 
             implied = self._ml_to_implied(fav_ml)
@@ -1009,7 +1011,26 @@ class AIPicksEngine:
                 "best_book": u.get("best_book"),
             })
 
-        # Dogs at -1.5 RL — must win outright by 2+
+        # Faves at -1.5 RL listed BEFORE dogs so they rank higher in conviction sort
+        for f in top_faves:
+            score = f.get("fav_score", 0)
+            conviction = score - 18
+            leg_odds = self._estimate_fav_rl_odds(f.get("moneyline"))
+            candidates.append({
+                "_conviction": conviction,
+                "type": "OTP_FAV_RL",
+                "play": f"{f['fav_team']} -1.5 RL",
+                "matchup": f["matchup"],
+                "original_line": "ML",
+                "moved_line": "-1.5 (win by 2+)",
+                "odds": leg_odds,
+                "difficulty": "Favorite must WIN BY 2+ runs",
+                "reasoning": " · ".join((f.get("reasons") or [])[:2]) if f.get("reasons") else f.get("verdict", ""),
+                "fav_team": f["fav_team"],
+                "best_book": f.get("best_book"),
+            })
+
+        # Dogs at -1.5 RL — must win outright by 2+ (longshot tier)
         for d in top_dogs:
             score = d.get("dog_score", 0)
             # Brutal jump from "cover +1.5" to "win by 2+": 30 point penalty
@@ -1027,26 +1048,6 @@ class AIPicksEngine:
                 "reasoning": " · ".join((d.get("reasons") or [])[:2]) if d.get("reasons") else d.get("verdict", ""),
                 "dog_team": d["dog_team"],
                 "best_book": d.get("best_book"),
-            })
-
-        # Faves at -1.5 RL — already-favored team must cover the runline by 2
-        for f in top_faves:
-            score = f.get("fav_score", 0)
-            # Fav ML → -1.5 RL: 18 point penalty
-            conviction = score - 18
-            leg_odds = self._estimate_fav_rl_odds(f.get("moneyline"))
-            candidates.append({
-                "_conviction": conviction,
-                "type": "OTP_FAV_RL",
-                "play": f"{f['fav_team']} -1.5 RL",
-                "matchup": f["matchup"],
-                "original_line": "ML",
-                "moved_line": "-1.5 (win by 2+)",
-                "odds": leg_odds,
-                "difficulty": "Favorite must WIN BY 2+ runs (no late comeback by dog)",
-                "reasoning": " · ".join((f.get("reasons") or [])[:2]) if f.get("reasons") else f.get("verdict", ""),
-                "fav_team": f["fav_team"],
-                "best_book": f.get("best_book"),
             })
 
         if not candidates:
@@ -1358,14 +1359,19 @@ class AIPicksEngine:
             score = g.get("total_score", 0)
             if score < 55:
                 continue
-            # Skip games where the line never posted — can't recommend a play with no number
-            closing = (g.get("line_movement") or {}).get("closing_total")
-            if closing is None:
+            lm = g.get("line_movement") or {}
+            closing = lm.get("closing_total")
+            # Fall back to current live total when no closing line cached yet
+            current = lm.get("current_total")
+            total = closing if closing is not None else current
+            if total is None:
                 continue
+            line_note = None if closing is not None else "line-subject-to-change"
             recs.append({
                 "game_pk": g.get("game_pk"),
                 "matchup": f"{g.get('away_team')} @ {g.get('home_team')}",
-                "closing_total": closing,
+                "closing_total": total,
+                "line_note": line_note,
                 "under_score": score,
                 "verdict": g.get("verdict"),
                 "confidence": self._under_confidence(score),
