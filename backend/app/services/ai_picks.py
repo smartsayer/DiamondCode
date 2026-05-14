@@ -30,9 +30,11 @@ class AIPicksEngine:
         parlay = self._build_smart_parlay(safe_play, top_unders, top_dogs, way_unders)
         power_parlay = self._build_power_parlay(top_overs, top_faves, top_unders, top_dogs)
         out_the_park_parlay = self._build_out_the_park_parlay(top_unders, top_dogs, broad_faves)
-        otp_used = {leg["matchup"] for leg in out_the_park_parlay.get("legs", [])}
+        # No game exclusion between OTP and WOTP — bets are structurally different
+        # (OTP = dogs -1.5 / faves -1.5 / unders -1.5 vs WOTP = faves -2.5 / unders -2.0)
+        # so overlapping games are fine; they're completely different bets on the same game.
         way_out_the_park_parlay = self._build_way_out_the_park_parlay(
-            top_unders, top_dogs, broad_faves, way_unders, exclude_matchups=otp_used
+            top_unders, top_dogs, broad_faves, way_unders
         )
         already_winning_parlay = self._build_already_winning_parlay(top_dogs, top_unders)
         nrfi_parlay = self._build_nrfi_parlay(clean)
