@@ -1480,7 +1480,7 @@ function AIBoard({ aiPicks, allGames }) {
       <ParlayCard parlay={parlay} title="VALUE PARLAY — UNDERS + DOGS" accentColor="#fbbf24" icon="🎫" />
 
       {/* POWER PARLAY (overs + faves) */}
-      <ParlayCard parlay={power_parlay} title="POWER PARLAY — OVERS + FAVES" accentColor="#fb7185" icon="💪" />
+      <ParlayCard parlay={power_parlay} title="BEST PARLAY OF THE DAY" accentColor="#fb7185" icon="🏆" />
 
       {/* NRFI PARLAY (No Run First Inning) */}
       <ParlayCard parlay={nrfi_parlay} title="NRFI PARLAY — STACKED 1ST INNING UNDERS" accentColor="#facc15" icon="🥚" />

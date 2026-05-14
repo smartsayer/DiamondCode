@@ -28,7 +28,7 @@ class AIPicksEngine:
         broad_faves = self._rank_faves(clean, min_score=35)
         safe_play = self._identify_safe_play(clean, top_unders)
         parlay = self._build_smart_parlay(safe_play, top_unders, top_dogs, way_unders)
-        power_parlay = self._build_power_parlay(top_overs, top_faves)
+        power_parlay = self._build_power_parlay(top_overs, top_faves, top_unders, top_dogs)
         out_the_park_parlay = self._build_out_the_park_parlay(top_unders, top_dogs, broad_faves)
         otp_used = {leg["matchup"] for leg in out_the_park_parlay.get("legs", [])}
         way_out_the_park_parlay = self._build_way_out_the_park_parlay(
@@ -659,58 +659,67 @@ class AIPicksEngine:
     # ── Power Parlay (Overs + Favorites) ─────────────────────────────────────
 
     def _build_power_parlay(
-        self, overs: list[dict[str, Any]], faves: list[dict[str, Any]]
+        self,
+        overs: list[dict[str, Any]],
+        faves: list[dict[str, Any]],
+        unders: Optional[list[dict[str, Any]]] = None,
+        dogs: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         """
-        Mirror of the value parlay but on the power side: best over + 1-2 favorites.
+        BEST PARLAY OF THE DAY — one top conviction pick from each category,
+        no score minimums. Always shows whatever is available.
+        Priority order: best under → best dog → best fave → best over.
         """
         legs: list[dict[str, Any]] = []
         used: set[str] = set()
 
-        # Leg 1: best over
-        if overs:
-            leg = self._over_leg(overs[0])
-            leg["leg_role"] = "📈 BEST OVER"
-            legs.append(leg)
-            used.add(overs[0]["matchup"])
+        # Best under
+        for u in (unders or []):
+            if u["matchup"] not in used:
+                leg = self._under_leg(u)
+                leg["leg_role"] = "📉 BEST UNDER"
+                legs.append(leg)
+                used.add(u["matchup"])
+                break
 
-        # Leg 2: top favorite
-        for f in faves:
+        # Best dog (different game from under)
+        for d in (dogs or []):
+            if d["matchup"] not in used:
+                leg = self._dog_leg(d)
+                leg["leg_role"] = f"🐕 {d['dog_team'].split()[-1].upper()} DOG"
+                legs.append(leg)
+                used.add(d["matchup"])
+                break
+
+        # Best fave (different game)
+        for f in (faves or []):
             if f["matchup"] not in used:
                 leg = self._fave_leg(f)
-                leg["leg_role"] = f"⭐ {f['fav_team'].split()[-1].upper()} {f['play_suggestion']}"
+                leg["leg_role"] = f"⭐ {f['fav_team'].split()[-1].upper()} {f.get('play_suggestion', 'ML')}"
                 legs.append(leg)
                 used.add(f["matchup"])
                 break
 
-        # Leg 3: second over if available
-        for o in overs[1:]:
-            if o["matchup"] not in used and o.get("over_score", 0) >= 60:
+        # Best over (different game)
+        for o in (overs or []):
+            if o["matchup"] not in used:
                 leg = self._over_leg(o)
-                leg["leg_role"] = "📈 OVER"
+                leg["leg_role"] = "📈 BEST OVER"
                 legs.append(leg)
                 used.add(o["matchup"])
                 break
 
-        # Leg 4: second favorite if available
-        for f in faves[1:]:
-            if f["matchup"] not in used and f.get("fav_score", 0) >= 60 and len(legs) < 4:
-                leg = self._fave_leg(f)
-                leg["leg_role"] = f"⭐ {f['fav_team'].split()[-1].upper()} {f['play_suggestion']}"
-                legs.append(leg)
-                used.add(f["matchup"])
-                break
-
         if not legs:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
-                    "note": "No qualifying over/fave plays", "structure": ""}
+                    "note": "No plays available yet — updates as lines come in", "structure": ""}
 
         combined_american, payout = self._calc_parlay_odds([leg["odds"] for leg in legs])
+        partial = " — more legs posting as lines open" if len(legs) < 4 else ""
         return {
             "legs": legs,
             "combined_odds": combined_american,
             "payout_per_100": round(payout * 100, 2),
-            "note": f"{len(legs)}-leg POWER parlay — overs and favorites",
+            "note": f"{len(legs)}-leg BEST PARLAY — highest conviction pick from each category{partial}",
             "structure": " + ".join(leg.get("leg_role", "?") for leg in legs),
         }
 
