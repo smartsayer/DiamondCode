@@ -30,7 +30,10 @@ class AIPicksEngine:
         parlay = self._build_smart_parlay(safe_play, top_unders, top_dogs, way_unders)
         power_parlay = self._build_power_parlay(top_overs, top_faves)
         out_the_park_parlay = self._build_out_the_park_parlay(top_unders, top_dogs, broad_faves)
-        way_out_the_park_parlay = self._build_way_out_the_park_parlay(top_unders, top_dogs, broad_faves)
+        otp_used = {leg["matchup"] for leg in out_the_park_parlay.get("legs", [])}
+        way_out_the_park_parlay = self._build_way_out_the_park_parlay(
+            top_unders, top_dogs, broad_faves, way_unders, exclude_matchups=otp_used
+        )
         nrfi_parlay = self._build_nrfi_parlay(clean)
         f5_under_parlay = self._build_f5_under_parlay(clean)
         team_total_parlay = self._build_team_total_parlay(clean)
@@ -1110,18 +1113,24 @@ class AIPicksEngine:
         top_unders: list[dict[str, Any]],
         top_dogs: list[dict[str, Any]],
         top_faves: list[dict[str, Any]],
+        way_unders: Optional[list[dict[str, Any]]] = None,
+        exclude_matchups: Optional[set] = None,
     ) -> dict[str, Any]:
         """
         WAY OUT THE PARK — the biggest swing on the slate.
+        Deliberately excludes games already used in OTP so the two parlays are distinct.
           - Faves at -2.5 RL (must WIN BY 3+)
-          - Dogs at -1.5 RL (must WIN OUTRIGHT BY 2+)
-          - Unders moved DOWN 2 runs minimum
+          - Dogs at -1.5 RL lower-ranked tail (different games from OTP)
+          - Unders moved DOWN 2 runs; prioritises way_unders for uniqueness
         Always 4 ranked legs, real per-leg American odds, real parlay math.
         """
+        exclude = exclude_matchups or set()
         candidates: list[dict[str, Any]] = []
 
-        # Unders: shave 2 runs off the total
-        for u in top_unders:
+        # Way-unders first (converging signals — highest confidence for -2 move)
+        for u in (way_unders or []):
+            if u["matchup"] in exclude:
+                continue
             closing = u.get("closing_total")
             if closing is None:
                 continue
@@ -1129,7 +1138,7 @@ class AIPicksEngine:
             if moved < 4.0:
                 continue
             score = u.get("under_score", 0)
-            conviction = score - 28  # -2 runs is brutal
+            conviction = score - 24  # way_unders have stronger signal → less penalty
             leg_odds = self._estimate_moved_under_odds(closing, moved)
             candidates.append({
                 "_conviction": conviction,
@@ -1144,8 +1153,38 @@ class AIPicksEngine:
                 "best_book": u.get("best_book"),
             })
 
-        # Dogs at -1.5 RL — same as OTP (can't reasonably go to -2.5 for dogs)
-        for d in top_dogs:
+        # Remaining top_unders — skip games already in candidates or excluded from OTP
+        already_under = {c["matchup"] for c in candidates}
+        for u in top_unders:
+            if u["matchup"] in exclude or u["matchup"] in already_under:
+                continue
+            closing = u.get("closing_total")
+            if closing is None:
+                continue
+            moved = round(closing - self._WOTP_UNDER_RUNS, 1)
+            if moved < 4.0:
+                continue
+            score = u.get("under_score", 0)
+            conviction = score - 28
+            leg_odds = self._estimate_moved_under_odds(closing, moved)
+            candidates.append({
+                "_conviction": conviction,
+                "type": "WOTP_UNDER",
+                "play": f"UNDER {moved}",
+                "matchup": u["matchup"],
+                "original_line": closing,
+                "moved_line": moved,
+                "odds": leg_odds,
+                "difficulty": f"Game must finish under {moved} ({self._WOTP_UNDER_RUNS} runs tougher than {closing})",
+                "reasoning": " · ".join((u.get("reasons") or [])[:2]) if u.get("reasons") else u.get("verdict", ""),
+                "best_book": u.get("best_book"),
+            })
+
+        # Dogs: skip OTP games, prefer lower-ranked dogs (tail of list = bigger underdogs)
+        # Reverse so worst dogs (highest payout) go first — maximises differentiation from OTP
+        for d in reversed(top_dogs):
+            if d["matchup"] in exclude:
+                continue
             score = d.get("dog_score", 0)
             conviction = score - 30
             leg_odds = self._estimate_dog_rl_odds(d.get("moneyline"))
@@ -1163,10 +1202,12 @@ class AIPicksEngine:
                 "best_book": d.get("best_book"),
             })
 
-        # Faves at -2.5 RL — must win by 3+
+        # Faves at -2.5 RL — skip OTP games
         for f in top_faves:
+            if f["matchup"] in exclude:
+                continue
             score = f.get("fav_score", 0)
-            conviction = score - 32  # -2.5 is the biggest favorite stretch
+            conviction = score - 32
             leg_odds = self._estimate_fav_alt_rl_odds(f.get("moneyline"), self._WOTP_FAV_RUNS)
             candidates.append({
                 "_conviction": conviction,
@@ -1176,11 +1217,33 @@ class AIPicksEngine:
                 "original_line": "ML",
                 "moved_line": f"-{self._WOTP_FAV_RUNS} (win by 3+)",
                 "odds": leg_odds,
-                "difficulty": f"Favorite must WIN BY 3+ runs (no late comeback by dog, no save situations)",
+                "difficulty": "Favorite must WIN BY 3+ runs (no late comeback by dog, no save situations)",
                 "reasoning": " · ".join((f.get("reasons") or [])[:2]) if f.get("reasons") else f.get("verdict", ""),
                 "fav_team": f["fav_team"],
                 "best_book": f.get("best_book"),
             })
+
+        # If still not enough after exclusions, fall back to OTP games (last resort)
+        if len(candidates) < 4:
+            for d in top_dogs:
+                if d["matchup"] in {c["matchup"] for c in candidates}:
+                    continue
+                score = d.get("dog_score", 0)
+                conviction = score - 35  # extra penalty for overlap
+                leg_odds = self._estimate_dog_rl_odds(d.get("moneyline"))
+                candidates.append({
+                    "_conviction": conviction,
+                    "type": "WOTP_DOG_RL",
+                    "play": f"{d['dog_team']} -1.5 RL",
+                    "matchup": d["matchup"],
+                    "original_line": "+1.5 (cover)",
+                    "moved_line": "-1.5 (win by 2+)",
+                    "odds": leg_odds,
+                    "difficulty": "Underdog must WIN OUTRIGHT BY 2+ runs",
+                    "reasoning": " · ".join((d.get("reasons") or [])[:2]) if d.get("reasons") else d.get("verdict", ""),
+                    "dog_team": d["dog_team"],
+                    "best_book": d.get("best_book"),
+                })
 
         if not candidates:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
