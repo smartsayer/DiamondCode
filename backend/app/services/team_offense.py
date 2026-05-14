@@ -7,6 +7,13 @@ MLB_BASE = "https://statsapi.mlb.com/api/v1"
 CURRENT_SEASON = date.today().year
 
 
+def _sf(v, default: float) -> float:
+    try:
+        return float(v) if v not in (None, "", "-.--", "-") else default
+    except (TypeError, ValueError):
+        return default
+
+
 class TeamOffenseService:
     """
     Team batting stats: season K%/OBP + actual runs scored last 10 games via schedule.
@@ -72,7 +79,7 @@ class TeamOffenseService:
                 s = splits[0].get("stat", {})
                 at_bats = int(s.get("atBats", 0) or 0)
                 ks = int(s.get("strikeOuts", 0) or 0)
-                obp = float(s.get("obp", 0.320) or 0.320)
+                obp = _sf(s.get("obp"), 0.320)
                 k_pct = ks / max(at_bats, 1)
                 return {"k_pct": k_pct, "obp": obp}
         return {}

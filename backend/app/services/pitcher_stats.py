@@ -5,6 +5,14 @@ from typing import Any, Optional
 CURRENT_SEASON = date.today().year
 
 
+def _sf(v, default: float) -> float:
+    """Safe float — handles MLB's '-.--' placeholder and None."""
+    try:
+        return float(v) if v not in (None, "", "-.--", "-") else default
+    except (TypeError, ValueError):
+        return default
+
+
 class PitcherStatsService:
     """
     Pulls pitcher ERA, WHIP, K%, and GB% from two sources in priority order:
@@ -124,9 +132,9 @@ class PitcherStatsService:
             return None
 
         stat = splits[0].get("stat", {})
-        era = float(stat.get("era", 4.50) or 4.50)
-        whip = float(stat.get("whip", 1.30) or 1.30)
-        k9 = float(stat.get("strikeoutsPer9Inn", 8.0) or 8.0)
+        era = _sf(stat.get("era"), 4.50)
+        whip = _sf(stat.get("whip"), 1.30)
+        k9 = _sf(stat.get("strikeoutsPer9Inn"), 8.0)
         k_pct = k9 / 27.0  # approximate
 
         under_score = self._compute_score(era, whip, k_pct, 0.45)
@@ -178,14 +186,14 @@ class PitcherStatsService:
         # Filter to actual starts (1+ IP)
         starts = [
             s for s in splits
-            if float(s.get("stat", {}).get("inningsPitched", 0) or 0) >= 1.0
+            if _sf(s.get("stat", {}).get("inningsPitched"), 0.0) >= 1.0
         ]
         recent = starts[-3:] if len(starts) >= 3 else starts
         if not recent:
             return neutral
 
-        total_er = sum(float(s.get("stat", {}).get("earnedRuns", 0) or 0) for s in recent)
-        total_ip = sum(float(s.get("stat", {}).get("inningsPitched", 0) or 0) for s in recent)
+        total_er = sum(_sf(s.get("stat", {}).get("earnedRuns"), 0.0) for s in recent)
+        total_ip = sum(_sf(s.get("stat", {}).get("inningsPitched"), 0.0) for s in recent)
         if total_ip < 1.0:
             return neutral
 

@@ -2026,7 +2026,7 @@ class AIPicksEngine:
         for g in games:
             f5 = g.get("f5") or {}
             score = f5.get("f5_score", 0)
-            if score < 58:
+            if score < 55:
                 continue
             projected = f5.get("projected_f5_line")
             line_str = f"F5 UNDER {projected}" if projected else "F5 UNDER (line TBD)"

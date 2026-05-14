@@ -68,12 +68,19 @@ class PlatoonSplitsService:
         except httpx.RequestError:
             return None
 
+        def _sf(v, default: float) -> float:
+            try:
+                return float(v) if v not in (None, "", "-.--", "-") else default
+            except (TypeError, ValueError):
+                return default
+
         result = {}
         for stat_group in data.get("stats", []):
             for split in stat_group.get("splits", []):
                 code = split.get("split", {}).get("code", "")
-                era = float(split.get("stat", {}).get("era", 4.50) or 4.50)
-                whip = float(split.get("stat", {}).get("whip", 1.30) or 1.30)
+                stat = split.get("stat", {})
+                era = _sf(stat.get("era"), 4.50)
+                whip = _sf(stat.get("whip"), 1.30)
                 if code == "vl":
                     result["vs_left"] = {"era": era, "whip": whip}
                 elif code == "vr":
