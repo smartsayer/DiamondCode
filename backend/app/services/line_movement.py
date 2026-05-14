@@ -296,6 +296,15 @@ class LineMovementService:
                     best = game
         return best
 
+    @staticmethod
+    def _safe_float(v) -> Optional[float]:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
     def _extract_total(self, game: dict) -> Optional[float]:
         for bm_key in SHARP_BOOK_PRIORITY:
             for bookmaker in game.get("bookmakers", []):
@@ -305,14 +314,18 @@ class LineMovementService:
                     if market.get("key") == "totals":
                         for outcome in market.get("outcomes", []):
                             if outcome.get("name") == "Over":
-                                return float(outcome.get("point", 0))
+                                v = self._safe_float(outcome.get("point"))
+                                if v is not None:
+                                    return v
         # Fallback: first available book
         for bookmaker in game.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
                 if market.get("key") == "totals":
                     for outcome in market.get("outcomes", []):
                         if outcome.get("name") == "Over":
-                            return float(outcome.get("point", 0))
+                            v = self._safe_float(outcome.get("point"))
+                            if v is not None:
+                                return v
         return None
 
     def _extract_total_book(self, game: dict) -> Optional[str]:
