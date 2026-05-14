@@ -159,10 +159,17 @@ class AIPicksEngine:
                     score_adj = (d.get("dog_score", 50) - 50) * 0.0010
                     our_prob = max(0.50, min(0.92, base + score_adj))
 
-            # DOG straight ML
+            # Straight ML — check FAVE side first, then DOG (both can appear as type ML)
             elif t == "ML":
+                f = fave_lookup.get(matchup)
                 d = dog_lookup.get(matchup)
-                if d:
+                play = (leg.get("play") or "").lower()
+                if f and (f.get("fav_team", "").lower() in play):
+                    # Fave ML: anchored on market ML, score nudges by ~1-2%
+                    base = pricing.american_to_prob(f.get("moneyline")) if f.get("moneyline") else 0.55
+                    score_adj = (f.get("fav_score", 50) - 50) * 0.0010
+                    our_prob = max(0.45, min(0.85, base + score_adj))
+                elif d:
                     our_prob = pricing.dog_win_prob_from_score(
                         d.get("dog_score", 50), d.get("moneyline")
                     )
@@ -173,6 +180,10 @@ class AIPicksEngine:
                 joint_our_prob *= our_prob
                 any_priced = True
             else:
+                # Unpriced leg: assume market-implied prob (zero edge contribution).
+                # This keeps the parlay-level math honest instead of fabricating a CRUSH.
+                if market_odds is not None:
+                    joint_our_prob *= pricing.american_to_prob(market_odds)
                 leg["edge"] = {"tier": "UNPRICED", "edge_pct": None, "color": "#666", "icon": "❓"}
 
         # ── Parlay-level edge ────────────────────────────────────────────────
