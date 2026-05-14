@@ -25,7 +25,7 @@ class AIPicksEngine:
         top_dogs = self._rank_dogs(clean)
         top_overs = self._rank_overs(clean)
         top_faves = self._rank_faves(clean)
-        broad_faves = self._rank_faves(clean, min_score=35)
+        broad_faves = self._rank_faves(clean, min_score=0)
         safe_play = self._identify_safe_play(clean, top_unders)
         parlay = self._build_smart_parlay(safe_play, top_unders, top_dogs, way_unders)
         power_parlay = self._build_power_parlay(top_overs, top_faves, top_unders, top_dogs)
@@ -1190,11 +1190,9 @@ class AIPicksEngine:
             })
 
         # WOTP signature bet: FAVES at -2.5 RL (win by 3+) — structurally different from OTP's dogs
-        # Use broad_faves with a low threshold so this card always has content on any slate
+        # No score floor — take any fave on the slate so this card always has content
         for f in top_faves:
             score = f.get("fav_score", 0)
-            if score < 35:
-                continue
             conviction = score - 20
             leg_odds = self._estimate_fav_alt_rl_odds(f.get("moneyline"), self._WOTP_FAV_RUNS)
             candidates.append({
