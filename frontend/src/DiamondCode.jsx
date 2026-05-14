@@ -2519,6 +2519,16 @@ export default function DiamondCode() {
 
   const allGames = slate?.games ?? [];
 
+  // Auto-switch to tomorrow when all today's games are done and no preview games remain
+  useEffect(() => {
+    if (dateOffset !== 0 || !slate || loading) return;
+    const hasPreviewOrLive = allGames.some(g => g.abstract_state === "Preview" || g.abstract_state === "Live");
+    const hasGames = allGames.length > 0;
+    if (hasGames && !hasPreviewOrLive) {
+      setDateOffset(1);
+    }
+  }, [allGames, slate, loading]);
+
   // Auto-refresh every 30s when games are live (in-progress)
   useEffect(() => {
     const hasLive = allGames.some(g => g.abstract_state === "Live");
@@ -2532,7 +2542,7 @@ export default function DiamondCode() {
     let lastDate = new Date().toISOString().slice(0, 10);
     const checkNewDay = () => {
       const today = new Date().toISOString().slice(0, 10);
-      if (today !== lastDate) { lastDate = today; fetchSlate(); }
+      if (today !== lastDate) { lastDate = today; setDateOffset(0); }
     };
     const onVisibility = () => { if (document.visibilityState === "visible") checkNewDay(); };
     document.addEventListener("visibilitychange", onVisibility);
@@ -2580,7 +2590,7 @@ export default function DiamondCode() {
       {/* Error */}
       {error && (
         <div style={{ background: "#ff3b3b12", border: "1px solid #ff3b3b25", borderRadius: 6, padding: "12px 16px", marginBottom: 18 }}>
-          <div style={{ color: "#ff3b3b", fontSize: 10 }}>⚠ Backend offline — make sure uvicorn is running</div>
+          <div style={{ color: "#ff3b3b", fontSize: 10 }}>⚠ Could not reach the DiamondCode server — retrying automatically</div>
           <div style={{ color: "#333", fontSize: 9, marginTop: 3 }}>{error}</div>
         </div>
       )}
