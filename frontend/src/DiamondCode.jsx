@@ -1235,6 +1235,181 @@ function PleaserCard({ parlay }) {
   );
 }
 
+function BestEdgeCard({ parlay }) {
+  if (!parlay) return null;
+  const legs = parlay.legs || [];
+  const hasLegs = legs.length > 0;
+  const accentColor = "#f59e0b";
+  const glowColor = "#f59e0b";
+
+  const TYPE_COLOR = {
+    BE_UNDER:  "#00ff87",
+    BE_FAV_ML: "#fb7185",
+    BE_FAV_RL: "#f97316",
+    BE_DOG_ML: "#a78bfa",
+    BE_DOG_RL: "#818cf8",
+  };
+  const TYPE_LABEL = {
+    BE_UNDER:  "UNDER",
+    BE_FAV_ML: "FAVE ML",
+    BE_FAV_RL: "FAVE -1.5",
+    BE_DOG_ML: "DOG ML",
+    BE_DOG_RL: "DOG +1.5",
+  };
+
+  // Always show 4 slots
+  const SLOTS = [1, 2, 3, 4].map((n, i) => legs[i] ? legs[i] : { _tbd: true, rank: n });
+
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, #0a0a0a 0%, #1a1100 60%, #0d0a00 100%)",
+      border: `2px solid ${hasLegs ? accentColor : "#2a2000"}`, borderRadius: 10,
+      padding: "18px 20px", marginBottom: 24,
+      boxShadow: hasLegs ? `0 0 36px ${glowColor}30` : "none",
+    }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, color: hasLegs ? accentColor : "#555", letterSpacing: 3, fontWeight: 900 }}>
+            🧠💰 BEST EDGE PARLAY
+          </div>
+          <div style={{ fontSize: 9, color: "#888", marginTop: 3 }}>
+            Pure signal — only legs clearing +3% EV make the cut
+          </div>
+          {parlay.note && (
+            <div style={{ fontSize: 8, color: "#666", marginTop: 3, fontFamily: "monospace" }}>
+              {parlay.note}
+            </div>
+          )}
+        </div>
+        {hasLegs && (
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 28, color: accentColor, fontWeight: 900, fontFamily: "monospace", textShadow: `0 0 14px ${glowColor}50` }}>
+              {parlay.combined_odds}
+            </div>
+            <div style={{ fontSize: 9, color: "#888", fontFamily: "monospace" }}>
+              ${parlay.payout_per_100?.toLocaleString()}/$100
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* EV banner */}
+      {hasLegs && parlay.avg_leg_ev != null && (
+        <div style={{
+          fontSize: 9, color: "#fde68a", marginBottom: 10, lineHeight: 1.5,
+          padding: "8px 12px", background: "#f59e0b12", borderRadius: 4,
+          border: "1px solid #f59e0b30",
+        }}>
+          ⚡ Every leg cleared <strong>EDGE tier (+3% EV)</strong> — model's highest-conviction plays today.
+          Avg leg EV: <strong>+{parlay.avg_leg_ev}%</strong>
+        </div>
+      )}
+
+      {/* Legs */}
+      {SLOTS.map((leg, i) => {
+        const legColor = leg._tbd ? "#333" : (TYPE_COLOR[leg.type] || accentColor);
+        const typeLabel = leg._tbd ? "" : (TYPE_LABEL[leg.type] || leg.type);
+        const rank = leg.rank || (i + 1);
+        const e = leg.edge || {};
+
+        return (
+          <div key={i} style={{
+            borderTop: "1px solid #1a1a1a",
+            padding: "13px 0",
+            display: "flex", gap: 12, alignItems: "flex-start",
+            background: leg._tbd ? "#ffffff03" : `${legColor}07`,
+            borderLeft: `2px solid ${leg._tbd ? "#333" : legColor + "40"}`,
+            paddingLeft: 10, borderRadius: "0 4px 4px 0", marginBottom: 2,
+            opacity: leg._tbd ? 0.4 : 1,
+          }}>
+            {/* Rank bubble */}
+            <div style={{ flexShrink: 0, textAlign: "center", minWidth: 36 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: "50%",
+                background: legColor + "20", color: legColor,
+                border: `2px solid ${legColor}60`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 13, fontWeight: 900, margin: "0 auto",
+              }}>#{rank}</div>
+              {typeLabel && (
+                <div style={{
+                  fontSize: 6, color: legColor, marginTop: 3,
+                  fontFamily: "monospace", letterSpacing: 0.3, fontWeight: 700, lineHeight: 1.1,
+                }}>
+                  {typeLabel}
+                </div>
+              )}
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {leg._tbd ? (
+                <div style={{ fontSize: 12, color: "#555", fontFamily: "monospace", letterSpacing: 2, paddingTop: 6 }}>
+                  ⏳ PICK TBD — UPDATING AS LINES POST
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: legColor, fontWeight: 700 }}>{leg.play}</span>
+                    {leg.odds != null && (
+                      <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
+                        {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
+                      </span>
+                    )}
+                    {/* Inline EV badge */}
+                    {e.edge_pct != null && (
+                      <span style={{
+                        fontSize: 9, fontFamily: "monospace", fontWeight: 800,
+                        color: e.color || accentColor,
+                        background: (e.color || accentColor) + "18",
+                        border: `1px solid ${(e.color || accentColor)}50`,
+                        padding: "1px 6px", borderRadius: 3, letterSpacing: 0.5,
+                      }}>
+                        {e.icon} {e.tier} {e.edge_pct > 0 ? `+${e.edge_pct}` : e.edge_pct}%
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
+                    {leg.matchup}
+                  </div>
+                  {leg.reasoning && (
+                    <div style={{ fontSize: 9, color: "#999", marginTop: 3, lineHeight: 1.4, fontStyle: "italic" }}>
+                      {leg.reasoning}
+                    </div>
+                  )}
+                  {e.our_prob != null && (
+                    <div style={{ fontSize: 8, color: "#555", marginTop: 2, fontFamily: "monospace" }}>
+                      model prob {(e.our_prob * 100).toFixed(1)}% · fair {e.our_fair_odds > 0 ? `+${e.our_fair_odds}` : e.our_fair_odds}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Parlay-level edge footer */}
+      {hasLegs && parlay.parlay_edge && parlay.parlay_edge.tier !== "UNPRICED" && (
+        <div style={{
+          marginTop: 10, padding: "6px 10px",
+          background: (parlay.parlay_edge.color || "#555") + "10",
+          border: `1px solid ${(parlay.parlay_edge.color || "#555")}30`,
+          borderRadius: 4, display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span style={{ fontSize: 9, color: parlay.parlay_edge.color, fontFamily: "monospace", fontWeight: 700 }}>
+            PARLAY EV {parlay.parlay_edge.icon} {parlay.parlay_edge.tier}
+            {parlay.parlay_edge.edge_pct != null ? ` ${parlay.parlay_edge.edge_pct > 0 ? '+' : ''}${parlay.parlay_edge.edge_pct}%` : ""}
+          </span>
+          <span style={{ fontSize: 8, color: "#555", fontFamily: "monospace" }}>
+            combined model prob {parlay.parlay_edge.our_prob != null ? `${(parlay.parlay_edge.our_prob * 100).toFixed(2)}%` : "—"}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OutTheParkCard({ parlay }) {
   if (!parlay) return null;
   const hasLegs = parlay.legs && parlay.legs.length > 0;
@@ -1281,30 +1456,29 @@ function OutTheParkCard({ parlay }) {
       </div>
       )}
 
-      {!hasLegs && (
-        <div style={{
-          textAlign: "center", padding: "20px 0", color: "#444",
-          fontSize: 10, letterSpacing: 2, fontFamily: "monospace",
-        }}>
-          ⏳ WAITING FOR LINES — REFRESHES AUTOMATICALLY
-        </div>
-      )}
-
-      {hasLegs && (() => {
+      {(() => {
         const FAVE_COLOR = "#fb7185";
         const DOG_COLOR = "#a78bfa";
         const UNDER_COLOR = "#00ff87";
         const colorFor = (t) => t === "OTP_UNDER" ? UNDER_COLOR : t === "OTP_DOG_RL" ? DOG_COLOR : FAVE_COLOR;
         const labelFor = (t) => t === "OTP_UNDER" ? "📉 UNDER LAYER" : t === "OTP_DOG_RL" ? "🐕 UPSET LAYER" : "⭐ FAVE LAYER";
+        const OTP_SLOTS = [
+          { rank_label: "FAVE ANCHOR", type: "OTP_FAV_RL" },
+          { rank_label: "FAVE SUPPORT", type: "OTP_FAV_RL" },
+          { rank_label: "UPSET PICK", type: "OTP_DOG_RL" },
+          { rank_label: "UNDER HAMMER", type: "OTP_UNDER" },
+        ];
+        const existingLegs = parlay.legs || [];
+        const slots = OTP_SLOTS.map((slot, i) => existingLegs[i] ? existingLegs[i] : { ...slot, _tbd: true, rank: i + 1 });
         let prevType = null;
-        return parlay.legs.map((leg, i) => {
-          const legColor = colorFor(leg.type);
+        return slots.map((leg, i) => {
+          const legColor = leg._tbd ? "#333" : colorFor(leg.type);
           const rank = leg.rank || (i + 1);
           const showDivider = i > 0 && leg.type !== prevType;
           prevType = leg.type;
           return (
             <div key={i}>
-              {showDivider && (
+              {showDivider && !leg._tbd && (
                 <div style={{
                   display: "flex", alignItems: "center", gap: 8,
                   margin: "6px 0", opacity: 0.55,
@@ -1317,12 +1491,13 @@ function OutTheParkCard({ parlay }) {
                 </div>
               )}
               <div style={{
-                borderTop: i === 0 ? "1px solid #1a1a1a" : showDivider ? "none" : "1px solid #1a1a1a",
+                borderTop: "1px solid #1a1a1a",
                 padding: "14px 0",
                 display: "flex", gap: 12, alignItems: "flex-start",
-                background: `${legColor}06`,
-                borderLeft: `2px solid ${legColor}30`,
+                background: leg._tbd ? "#ffffff04" : `${legColor}06`,
+                borderLeft: `2px solid ${leg._tbd ? "#333" : legColor + "30"}`,
                 paddingLeft: 10, borderRadius: "0 4px 4px 0", marginBottom: 2,
+                opacity: leg._tbd ? 0.45 : 1,
               }}>
                 <div style={{ flexShrink: 0, textAlign: "center", minWidth: 36 }}>
                   <div style={{
@@ -1341,36 +1516,41 @@ function OutTheParkCard({ parlay }) {
                   </div>
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 13, color: legColor, fontWeight: 700 }}>{leg.play}</span>
-                    {leg.odds != null && (
-                      <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
-                        {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
-                      </span>
-                    )}
-                    <EdgeChip edge={leg.edge} />
-                    <span style={{ fontSize: 9, color: "#e879f9", fontFamily: "monospace" }}>
-                      was {leg.original_line}
-                    </span>
-                    {leg.best_book && (
-                      <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
-                    {leg.matchup}
-                  </div>
-                  {leg.difficulty && (
-                    <div style={{
-                      fontSize: 9, color: "#f0abfc", marginTop: 5, fontFamily: "monospace",
-                      fontStyle: "italic",
-                    }}>
-                      ⚡ {leg.difficulty}
+                  {leg._tbd ? (
+                    <div style={{ fontSize: 12, color: "#555", fontFamily: "monospace", letterSpacing: 2, paddingTop: 6 }}>
+                      ⏳ PICK TBD — UPDATING AS LINES POST
                     </div>
-                  )}
-                  {leg.reasoning && (
-                    <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                      {leg.reasoning}
-                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 13, color: legColor, fontWeight: 700 }}>{leg.play}</span>
+                        {leg.odds != null && (
+                          <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
+                            {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
+                          </span>
+                        )}
+                        <EdgeChip edge={leg.edge} />
+                        <span style={{ fontSize: 9, color: "#e879f9", fontFamily: "monospace" }}>
+                          was {leg.original_line}
+                        </span>
+                        {leg.best_book && (
+                          <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
+                        {leg.matchup}
+                      </div>
+                      {leg.difficulty && (
+                        <div style={{ fontSize: 9, color: "#f0abfc", marginTop: 5, fontFamily: "monospace", fontStyle: "italic" }}>
+                          ⚡ {leg.difficulty}
+                        </div>
+                      )}
+                      {leg.reasoning && (
+                        <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                          {leg.reasoning}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -1428,26 +1608,23 @@ function WayOutTheParkCard({ parlay }) {
       </div>
       )}
 
-      {!hasLegs && (
-        <div style={{
-          textAlign: "center", padding: "20px 0", color: "#444",
-          fontSize: 10, letterSpacing: 2, fontFamily: "monospace",
-        }}>
-          ⏳ WAITING FOR LINES — REFRESHES AUTOMATICALLY
-        </div>
-      )}
-
-      {hasLegs && (() => {
-        // Group legs by layer for visual separation
+      {(() => {
         const FAVE_COLOR = "#fb7185";
         const UNDER_COLOR = "#00ff87";
+        const WOTP_SLOTS = [
+          { rank_label: "FAVE ANCHOR", type: "WOTP_FAV_RL" },
+          { rank_label: "UNDER LOCK", type: "WOTP_UNDER" },
+          { rank_label: "FAVE SUPPORT", type: "WOTP_FAV_RL" },
+          { rank_label: "UNDER HAMMER", type: "WOTP_UNDER" },
+        ];
+        const existingLegs = parlay.legs || [];
+        const slots = WOTP_SLOTS.map((slot, i) => existingLegs[i] ? existingLegs[i] : { ...slot, _tbd: true, rank: i + 1 });
         let prevType = null;
-        return parlay.legs.map((leg, i) => {
+        return slots.map((leg, i) => {
           const isUnder = leg.type === "WOTP_UNDER";
-          const legColor = isUnder ? UNDER_COLOR : FAVE_COLOR;
+          const legColor = leg._tbd ? "#333" : (isUnder ? UNDER_COLOR : FAVE_COLOR);
           const rank = leg.rank || (i + 1);
-          // Show a layer divider when bet type switches
-          const showDivider = i > 0 && isUnder !== (prevType === "WOTP_UNDER");
+          const showDivider = i > 0 && !leg._tbd && isUnder !== (prevType === "WOTP_UNDER");
           prevType = leg.type;
           return (
             <div key={i}>
@@ -1464,12 +1641,13 @@ function WayOutTheParkCard({ parlay }) {
                 </div>
               )}
               <div style={{
-                borderTop: i === 0 ? "1px solid #1a1a1a" : showDivider ? "none" : "1px solid #1a1a1a",
+                borderTop: "1px solid #1a1a1a",
                 padding: "14px 0",
                 display: "flex", gap: 12, alignItems: "flex-start",
-                background: `${legColor}06`,
-                borderLeft: `2px solid ${legColor}30`,
+                background: leg._tbd ? "#ffffff04" : `${legColor}06`,
+                borderLeft: `2px solid ${leg._tbd ? "#333" : legColor + "30"}`,
                 paddingLeft: 10, borderRadius: "0 4px 4px 0", marginBottom: 2,
+                opacity: leg._tbd ? 0.45 : 1,
               }}>
                 <div style={{ flexShrink: 0, textAlign: "center", minWidth: 36 }}>
                   <div style={{
@@ -1488,34 +1666,41 @@ function WayOutTheParkCard({ parlay }) {
                   </div>
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 13, color: legColor, fontWeight: 700 }}>{leg.play}</span>
-                    <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
-                      {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
-                    </span>
-                    <EdgeChip edge={leg.edge} />
-                    <span style={{ fontSize: 9, color: "#ec4899", fontFamily: "monospace" }}>
-                      was {leg.original_line}
-                    </span>
-                    {leg.best_book && (
-                      <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
-                    {leg.matchup}
-                  </div>
-                  {leg.difficulty && (
-                    <div style={{
-                      fontSize: 9, color: "#fbcfe8", marginTop: 5, fontFamily: "monospace",
-                      fontStyle: "italic",
-                    }}>
-                      ⚡ {leg.difficulty}
+                  {leg._tbd ? (
+                    <div style={{ fontSize: 12, color: "#555", fontFamily: "monospace", letterSpacing: 2, paddingTop: 6 }}>
+                      ⏳ PICK TBD — UPDATING AS LINES POST
                     </div>
-                  )}
-                  {leg.reasoning && (
-                    <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                      {leg.reasoning}
-                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 13, color: legColor, fontWeight: 700 }}>{leg.play}</span>
+                        {leg.odds != null && (
+                          <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
+                            {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
+                          </span>
+                        )}
+                        <EdgeChip edge={leg.edge} />
+                        <span style={{ fontSize: 9, color: "#ec4899", fontFamily: "monospace" }}>
+                          was {leg.original_line}
+                        </span>
+                        {leg.best_book && (
+                          <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
+                        {leg.matchup}
+                      </div>
+                      {leg.difficulty && (
+                        <div style={{ fontSize: 9, color: "#fbcfe8", marginTop: 5, fontFamily: "monospace", fontStyle: "italic" }}>
+                          ⚡ {leg.difficulty}
+                        </div>
+                      )}
+                      {leg.reasoning && (
+                        <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                          {leg.reasoning}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -1569,6 +1754,7 @@ function AIBoard({ aiPicks, allGames }) {
     out_the_park_parlay = {}, way_out_the_park_parlay = {},
     already_winning_parlay = {},
     nrfi_parlay = {}, f5_under_parlay = {}, team_total_parlay = {},
+    best_edge_parlay = {},
     rankings = [], watch_list = [], skip_list = [], flagged_lines = [],
   } = aiPicks;
 
@@ -1652,6 +1838,9 @@ function AIBoard({ aiPicks, allGames }) {
       )}
 
       {/* VALUE PARLAY (unders + dogs) */}
+      {/* BEST EDGE PARLAY — pure signal, highest EV legs regardless of type */}
+      <BestEdgeCard parlay={best_edge_parlay} />
+
       <ParlayCard parlay={parlay} title="VALUE PARLAY — UNDERS + DOGS" accentColor="#fbbf24" icon="🎫" />
 
       {/* POWER PARLAY (overs + faves) */}
