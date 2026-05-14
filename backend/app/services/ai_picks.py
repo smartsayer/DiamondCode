@@ -41,6 +41,7 @@ class AIPicksEngine:
         nrfi_parlay = self._build_nrfi_parlay(clean)
         f5_under_parlay = self._build_f5_under_parlay(clean)
         team_total_parlay = self._build_team_total_parlay(clean)
+        best_edge_parlay = self._build_best_edge_parlay(top_unders, top_dogs, broad_faves)
         rankings = self._rank_full_board(preview, flagged_pks)
         watch_list = self._build_watch_list(clean)
         skip_list = self._build_skip_list(clean)
@@ -64,6 +65,7 @@ class AIPicksEngine:
             "nrfi_parlay": nrfi_parlay,
             "f5_under_parlay": f5_under_parlay,
             "team_total_parlay": team_total_parlay,
+            "best_edge_parlay": best_edge_parlay,
         }
         for _name, p in all_parlays.items():
             if p:
@@ -84,6 +86,7 @@ class AIPicksEngine:
             "nrfi_parlay": nrfi_parlay,
             "f5_under_parlay": f5_under_parlay,
             "team_total_parlay": team_total_parlay,
+            "best_edge_parlay": best_edge_parlay,
             "rankings": rankings,
             "watch_list": watch_list,
             "skip_list": skip_list,
@@ -1959,6 +1962,171 @@ class AIPicksEngine:
             return f"+{round(payout * 100)}", payout
         return f"{round(-100 / payout)}", payout
 
+    def _build_best_edge_parlay(
+        self,
+        top_unders: list[dict[str, Any]],
+        top_dogs: list[dict[str, Any]],
+        broad_faves: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        Pure signal parlay — scans every bet type across every game and keeps
+        only the legs with the highest computed EV (≥3%). No fixed structure.
+        The engine picks the 4 best-priced bets on the slate regardless of type.
+        """
+        candidates: list[dict[str, Any]] = []
+
+        # ── Unders ──────────────────────────────────────────────────────────
+        for u in top_unders:
+            score = u.get("under_score", 0)
+            market = u.get("best_price") or -110
+            our_prob = pricing.under_prob_from_score(score)
+            e = pricing.price_leg(our_prob, market)
+            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+                continue
+            candidates.append({
+                "game_pk": u.get("game_pk"),
+                "matchup": u.get("matchup"),
+                "play": f"UNDER {u.get('closing_total')}",
+                "type": "BE_UNDER",
+                "odds": market,
+                "reasoning": (u.get("reasons") or ["Under edge"])[0],
+                "edge": e,
+                "_score": e["edge_pct"],
+            })
+
+        # ── Fave ML ──────────────────────────────────────────────────────────
+        for f in broad_faves:
+            ml = f.get("moneyline")
+            if ml is None:
+                continue
+            score = f.get("fav_score", 50)
+            base = pricing.american_to_prob(ml)
+            our_prob = max(0.45, min(0.85, base + (score - 50) * 0.0010))
+            e = pricing.price_leg(our_prob, ml)
+            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+                continue
+            candidates.append({
+                "game_pk": f.get("game_pk"),
+                "matchup": f.get("matchup"),
+                "play": f"{f.get('fav_team')} ML",
+                "type": "BE_FAV_ML",
+                "odds": ml,
+                "reasoning": (f.get("reasons") or ["Fave edge"])[0],
+                "edge": e,
+                "_score": e["edge_pct"],
+            })
+
+        # ── Fave -1.5 RL ─────────────────────────────────────────────────────
+        for f in broad_faves:
+            ml = f.get("moneyline")
+            if ml is None:
+                continue
+            score = f.get("fav_score", 50)
+            our_prob = pricing.fav_cover_prob_from_score(score, ml, 1.5)
+            rl_odds = self._estimate_fav_rl_odds(ml)
+            e = pricing.price_leg(our_prob, rl_odds)
+            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+                continue
+            candidates.append({
+                "game_pk": f.get("game_pk"),
+                "matchup": f.get("matchup"),
+                "play": f"{f.get('fav_team')} -1.5 RL",
+                "type": "BE_FAV_RL",
+                "odds": rl_odds,
+                "reasoning": (f.get("reasons") or ["Fave RL edge"])[0],
+                "edge": e,
+                "_score": e["edge_pct"],
+            })
+
+        # ── Dog ML ───────────────────────────────────────────────────────────
+        for d in top_dogs:
+            ml = d.get("moneyline")
+            if ml is None:
+                continue
+            score = d.get("dog_score", 50)
+            our_prob = pricing.dog_win_prob_from_score(score, ml)
+            e = pricing.price_leg(our_prob, ml)
+            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+                continue
+            candidates.append({
+                "game_pk": d.get("game_pk"),
+                "matchup": d.get("matchup"),
+                "play": f"{d.get('dog_team')} ML UPSET",
+                "type": "BE_DOG_ML",
+                "odds": ml,
+                "reasoning": (d.get("reasons") or ["Dog edge"])[0],
+                "edge": e,
+                "_score": e["edge_pct"],
+            })
+
+        # ── Dog +1.5 RL ──────────────────────────────────────────────────────
+        for d in top_dogs:
+            ml = d.get("moneyline")
+            if ml is None:
+                continue
+            score = d.get("dog_score", 50)
+            our_prob = pricing.dog_rl_cover_prob_from_ml(ml)
+            our_prob = max(0.50, min(0.92, our_prob + (score - 50) * 0.0010))
+            rl_odds = self._estimate_dog_rl_odds(ml)
+            e = pricing.price_leg(our_prob, rl_odds)
+            if e.get("edge_pct") is None or e["edge_pct"] < 3.0:
+                continue
+            candidates.append({
+                "game_pk": d.get("game_pk"),
+                "matchup": d.get("matchup"),
+                "play": f"{d.get('dog_team')} +1.5 RL",
+                "type": "BE_DOG_RL",
+                "odds": rl_odds,
+                "reasoning": (d.get("reasons") or ["Dog +1.5 edge"])[0],
+                "edge": e,
+                "_score": e["edge_pct"],
+            })
+
+        if not candidates:
+            return {
+                "legs": [], "combined_odds": "—", "payout_per_100": 0,
+                "structure": "", "note": "No legs clear EDGE tier today — check back as lines sharpen",
+            }
+
+        # Sort by edge%, deduplicate by game_pk (best bet per game only)
+        candidates.sort(key=lambda x: x["_score"], reverse=True)
+        seen_games: set = set()
+        top: list[dict] = []
+        for c in candidates:
+            gk = c.get("game_pk")
+            if gk in seen_games:
+                continue
+            seen_games.add(gk)
+            top.append(c)
+            if len(top) == 4:
+                break
+
+        if not top:
+            return {
+                "legs": [], "combined_odds": "—", "payout_per_100": 0,
+                "structure": "", "note": "No legs clear EDGE tier today",
+            }
+
+        # Rank labels by edge tier
+        tier_labels = {"CRUSH": "💎 CRUSH", "EDGE": "📈 EDGE", "FAIR": "⚖️ FAIR", "PASS": "🚫 PASS"}
+        for i, leg in enumerate(top, start=1):
+            leg["rank"] = i
+            leg["rank_label"] = tier_labels.get(leg["edge"].get("tier", ""), f"#{i}")
+            leg.pop("_score", None)
+
+        combined, payout = self._calc_parlay_odds([l["odds"] for l in top])
+        structure = " · ".join(f"#{l['rank']} {l['play'].split()[0]}" for l in top)
+        avg_ev = round(sum(l["edge"].get("edge_pct", 0) for l in top) / len(top), 1)
+
+        return {
+            "legs": top,
+            "combined_odds": combined,
+            "payout_per_100": round(payout * 100, 2),
+            "structure": structure,
+            "note": f"{len(top)}-leg best-edge stack · avg leg EV +{avg_ev}% · pure signal, no fixed structure",
+            "avg_leg_ev": avg_ev,
+        }
+
     def _empty(self) -> dict[str, Any]:
         empty_parlay = {"legs": [], "combined_odds": "—", "payout_per_100": 0, "structure": ""}
         return {
@@ -1972,6 +2140,7 @@ class AIPicksEngine:
             "nrfi_parlay": empty_parlay,
             "f5_under_parlay": empty_parlay,
             "team_total_parlay": empty_parlay,
+            "best_edge_parlay": empty_parlay,
             "rankings": [],
             "watch_list": [],
             "skip_list": [],
