@@ -1101,48 +1101,23 @@ class AIPicksEngine:
         top_faves: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """
-        OUT THE PARK PARLAY — extreme reverse tease. Minimum 1.5 runs moved AGAINST you.
-        Always 4 legs ranked 1→4. The biggest swing on the board.
-          - Unders moved DOWN minimum 1.5 runs (UNDER closing - 1.5)
-          - Dogs at -1.5 RL (must WIN OUTRIGHT BY 2+)
-          - Faves at -1.5 RL (must WIN BY 2+)
+        OUT THE PARK — layered tease parlay. Each line moved 1.5 runs against you.
+        Locked structure (always the same shape, best of each type):
+          Layer A: 2 × FAVE -1.5 RL   (anchors — fav must win by 2+)
+          Layer B: 1 × DOG  -1.5 RL   (upset — dog must win outright by 2+)
+          Layer C: 1 × UNDER -1.5     (totals — game stays 1.5 below the line)
+        Order: FAVE → FAVE → UPSET → UNDER.
         """
-        candidates: list[dict[str, Any]] = []
-
-        # Unders: shave 1.5 off the total, big penalty since this is brutal
-        for u in top_unders:
-            closing = u.get("closing_total")
-            if closing is None:
-                continue
-            moved = round(closing - self._OUT_THE_PARK_AMOUNT, 1)
-            if moved < 4.0:  # don't recommend absurd totals
-                continue
-            score = u.get("under_score", 0)
-            # Under -1.5 penalty: ~20 conviction points (much harder than -1)
-            conviction = score - 20
-            leg_odds = self._estimate_moved_under_odds(closing, moved)
-            candidates.append({
-                "_conviction": conviction,
-                "type": "OTP_UNDER",
-                "play": f"UNDER {moved}",
-                "matchup": u["matchup"],
-                "original_line": closing,
-                "moved_line": moved,
-                "odds": leg_odds,
-                "difficulty": f"Game must finish under {moved} (1.5 runs tougher than {closing})",
-                "reasoning": " · ".join((u.get("reasons") or [])[:2]) if u.get("reasons") else u.get("verdict", ""),
-                "best_book": u.get("best_book"),
-            })
-
-        # Faves at -1.5 RL listed BEFORE dogs so they rank higher in conviction sort
-        for f in top_faves:
+        # ── Layer A: Top 2 faves at -1.5 RL ───────────────────────────────────
+        fave_legs: list[dict[str, Any]] = []
+        used: set[str] = set()
+        for f in sorted(top_faves, key=lambda x: x.get("fav_score", 0), reverse=True):
             if f.get("moneyline") is None:
                 continue
-            score = f.get("fav_score", 0)
-            conviction = score - 18
+            if f["matchup"] in used:
+                continue
             leg_odds = self._estimate_fav_rl_odds(f.get("moneyline"))
-            candidates.append({
-                "_conviction": conviction,
+            fave_legs.append({
                 "type": "OTP_FAV_RL",
                 "play": f"{f['fav_team']} -1.5 RL",
                 "matchup": f["matchup"],
@@ -1154,16 +1129,19 @@ class AIPicksEngine:
                 "fav_team": f["fav_team"],
                 "best_book": f.get("best_book"),
             })
+            used.add(f["matchup"])
+            if len(fave_legs) >= 2:
+                break
 
-        # Dogs at -1.5 RL — must win outright by 2+ (longshot tier)
-        for d in top_dogs:
+        # ── Layer B: Top 1 dog at -1.5 RL (must win by 2+) ────────────────────
+        dog_leg: Optional[dict[str, Any]] = None
+        for d in sorted(top_dogs, key=lambda x: x.get("dog_score", 0), reverse=True):
             if d.get("moneyline") is None:
-                continue  # skip — no real ML data, odds would be fake
-            score = d.get("dog_score", 0)
-            conviction = score - 30
+                continue
+            if d["matchup"] in used:
+                continue
             leg_odds = self._estimate_dog_rl_odds(d.get("moneyline"))
-            candidates.append({
-                "_conviction": conviction,
+            dog_leg = {
                 "type": "OTP_DOG_RL",
                 "play": f"{d['dog_team']} -1.5 RL",
                 "matchup": d["matchup"],
@@ -1174,48 +1152,76 @@ class AIPicksEngine:
                 "reasoning": " · ".join((d.get("reasons") or [])[:2]) if d.get("reasons") else d.get("verdict", ""),
                 "dog_team": d["dog_team"],
                 "best_book": d.get("best_book"),
-            })
+            }
+            used.add(d["matchup"])
+            break
 
-        if not candidates:
+        # ── Layer C: Top 1 under at -1.5 below the line ───────────────────────
+        under_leg: Optional[dict[str, Any]] = None
+        for u in top_unders:
+            if u["matchup"] in used:
+                continue
+            closing = u.get("closing_total")
+            if closing is None:
+                continue
+            moved = round(closing - self._OUT_THE_PARK_AMOUNT, 1)
+            if moved < 4.0:
+                continue
+            leg_odds = self._estimate_moved_under_odds(closing, moved)
+            under_leg = {
+                "type": "OTP_UNDER",
+                "play": f"UNDER {moved}",
+                "matchup": u["matchup"],
+                "original_line": closing,
+                "moved_line": moved,
+                "odds": leg_odds,
+                "difficulty": f"Game must finish under {moved} (1.5 runs tougher than {closing})",
+                "reasoning": " · ".join((u.get("reasons") or [])[:2]) if u.get("reasons") else u.get("verdict", ""),
+                "best_book": u.get("best_book"),
+            }
+            used.add(u["matchup"])
+            break
+
+        # ── Assemble in order: FAVE → FAVE → UPSET → UNDER ────────────────────
+        legs: list[dict[str, Any]] = []
+        legs.extend(fave_legs)
+        if dog_leg:
+            legs.append(dog_leg)
+        if under_leg:
+            legs.append(under_leg)
+
+        if not legs:
             return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
                     "structure": "", "note": "Not enough qualifiers yet — updates as lines come in",
                     "otp_amount": f"{self._OUT_THE_PARK_AMOUNT} runs"}
 
-        # Rank by conviction descending
-        candidates.sort(key=lambda x: x["_conviction"], reverse=True)
-
-        legs: list[dict[str, Any]] = []
-        used: set[str] = set()
-        for c in candidates:
-            if c["matchup"] in used:
-                continue
-            legs.append(c)
-            used.add(c["matchup"])
-            if len(legs) >= 4:
-                break
-
-        # Stamp ranks 1-4 with vivid labels for the biggest swing of the day
+        # Layered rank labels — match WOTP visual language
+        _fave_labels = ["FAVE ANCHOR", "FAVE SUPPORT"]
+        fave_i = 0
         for i, leg in enumerate(legs, start=1):
             leg["rank"] = i
-            leg["rank_label"] = (
-                "BEST SHOT" if i == 1
-                else "STILL ALIVE" if i == 2
-                else "MOON SHOT" if i == 3
-                else "OUT THE PARK"
-            )
-            leg.pop("_conviction", None)
+            if leg["type"] == "OTP_FAV_RL":
+                leg["rank_label"] = _fave_labels[fave_i] if fave_i < len(_fave_labels) else "FAVE"
+                fave_i += 1
+            elif leg["type"] == "OTP_DOG_RL":
+                leg["rank_label"] = "UPSET PICK"
+            else:
+                leg["rank_label"] = "UNDER HAMMER"
 
-        # Real parlay math: multiply per-leg American odds for realistic combined price
         combined_american, payout = self._calc_parlay_odds([l["odds"] for l in legs])
 
         structure_parts = []
         for l in legs:
             tag = (
-                f"🐕 {l.get('dog_team','').split()[-1]} -1.5" if l["type"] == "OTP_DOG_RL"
-                else f"⭐ {l.get('fav_team','').split()[-1]} -1.5" if l["type"] == "OTP_FAV_RL"
+                f"⭐ {l.get('fav_team','').split()[-1]} -1.5" if l["type"] == "OTP_FAV_RL"
+                else f"🐕 {l.get('dog_team','').split()[-1]} -1.5" if l["type"] == "OTP_DOG_RL"
                 else "📉 U-1.5"
             )
             structure_parts.append(f"#{l['rank']} {tag}")
+
+        fave_count = sum(1 for l in legs if l["type"] == "OTP_FAV_RL")
+        dog_count  = sum(1 for l in legs if l["type"] == "OTP_DOG_RL")
+        under_count = sum(1 for l in legs if l["type"] == "OTP_UNDER")
 
         return {
             "legs": legs,
@@ -1223,7 +1229,7 @@ class AIPicksEngine:
             "payout_per_100": round(payout * 100, 2),
             "otp_amount": f"{self._OUT_THE_PARK_AMOUNT} runs",
             "structure": " · ".join(structure_parts),
-            "note": f"{len(legs)}-leg OUT THE PARK — minimum 1.5 runs moved against you. The biggest swing of the day.",
+            "note": f"{len(legs)}-leg OUT THE PARK — layered: {fave_count} fave -1.5 · {dog_count} dog upset -1.5 · {under_count} under -1.5",
         }
 
     # ── WAY OUT THE PARK Parlay (extreme reverse — faves -2.5, dogs -1.5, unders -2) ──
