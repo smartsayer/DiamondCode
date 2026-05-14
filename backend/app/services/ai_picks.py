@@ -34,6 +34,7 @@ class AIPicksEngine:
         way_out_the_park_parlay = self._build_way_out_the_park_parlay(
             top_unders, top_dogs, broad_faves, way_unders, exclude_matchups=otp_used
         )
+        already_winning_parlay = self._build_already_winning_parlay(top_dogs, top_unders)
         nrfi_parlay = self._build_nrfi_parlay(clean)
         f5_under_parlay = self._build_f5_under_parlay(clean)
         team_total_parlay = self._build_team_total_parlay(clean)
@@ -53,6 +54,7 @@ class AIPicksEngine:
             "top_faves": _strip(top_faves[:5]),
             "parlay": parlay,
             "power_parlay": power_parlay,
+            "already_winning_parlay": already_winning_parlay,
             "out_the_park_parlay": out_the_park_parlay,
             "way_out_the_park_parlay": way_out_the_park_parlay,
             "nrfi_parlay": nrfi_parlay,
@@ -655,6 +657,114 @@ class AIPicksEngine:
         else:
             mult = 0.16
         return self._prob_to_ml(fav_prob * mult)
+
+    def _estimate_dog_cover_rl_odds(self, dog_ml: float) -> int:
+        """
+        Dog at +1.5 RL — they cover if they win outright OR lose by exactly 1.
+        Calibrated: +1.5 cover prob ≈ dog ML win prob + 0.20 (the 1-run cushion).
+        """
+        if dog_ml is None:
+            return -140
+        dog_prob = self._ml_to_prob(dog_ml)
+        cover_prob = min(dog_prob + 0.20, 0.84)
+        return self._prob_to_ml(cover_prob)
+
+    # ── Already Winning Parlay (Dogs +1.5 RL + Unders) ───────────────────────
+
+    def _build_already_winning_parlay(
+        self,
+        top_dogs: list[dict[str, Any]],
+        top_unders: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        ALREADY WINNING — you're in a winning position before pitch 1.
+          - Dogs at +1.5 RL: lose by 1 OR win outright → still cash
+          - Unders at the line: scoring has to happen TO beat you
+        4 legs: best 2 dogs + best 2 unders (no game overlap).
+        """
+        candidates: list[dict[str, Any]] = []
+
+        for d in top_dogs:
+            odds = self._estimate_dog_cover_rl_odds(d.get("moneyline"))
+            candidates.append({
+                "_score": d.get("dog_score", 0),
+                "_type_order": 0,
+                "type": "AW_DOG_RL",
+                "play": f"{d['dog_team']} +1.5 RL",
+                "matchup": d["matchup"],
+                "odds": odds,
+                "difficulty": "Dog covers if they lose by 1 OR win outright",
+                "reasoning": " · ".join((d.get("reasons") or [])[:2]) if d.get("reasons") else d.get("verdict", ""),
+                "dog_team": d["dog_team"],
+                "best_book": d.get("best_book"),
+            })
+
+        for u in top_unders:
+            total = u.get("closing_total") or u.get("current_total")
+            if total is None:
+                continue
+            candidates.append({
+                "_score": u.get("under_score", 0),
+                "_type_order": 1,
+                "type": "AW_UNDER",
+                "play": f"UNDER {total}",
+                "matchup": u["matchup"],
+                "odds": -110,
+                "difficulty": f"Total stays under {total} — scoring works against you",
+                "reasoning": " · ".join((u.get("reasons") or [])[:2]) if u.get("reasons") else u.get("verdict", ""),
+                "best_book": u.get("best_book"),
+            })
+
+        if not candidates:
+            return {"legs": [], "combined_odds": "—", "payout_per_100": 0,
+                    "structure": "", "note": "No qualifying plays yet — updates as lines come in"}
+
+        # Alternate: pick best dog, best under, second dog, second under
+        candidates.sort(key=lambda x: (-x["_type_order"], -x["_score"]))
+        dogs = [c for c in candidates if c["type"] == "AW_DOG_RL"]
+        unders = [c for c in candidates if c["type"] == "AW_UNDER"]
+
+        legs: list[dict[str, Any]] = []
+        used: set[str] = set()
+        rank_labels = ("LOCK", "STRONG", "LEAN", "DART")
+
+        # Interleave: dog → under → dog → under for balance
+        pools = [dogs, unders, dogs, unders]
+        seen_per_pool: list[set] = [set(), set(), set(), set()]
+        for pool_idx, pool in enumerate(pools):
+            for c in pool:
+                if c["matchup"] in used or c["matchup"] in seen_per_pool[pool_idx]:
+                    continue
+                legs.append(c)
+                used.add(c["matchup"])
+                seen_per_pool[pool_idx].add(c["matchup"])
+                break
+            if len(legs) == 4:
+                break
+
+        for i, leg in enumerate(legs, start=1):
+            leg["rank"] = i
+            leg["rank_label"] = rank_labels[i - 1] if i <= len(rank_labels) else "DART"
+            leg.pop("_score", None)
+            leg.pop("_type_order", None)
+
+        combined_american, payout = self._calc_parlay_odds([l["odds"] for l in legs])
+
+        structure_parts = []
+        for l in legs:
+            if l["type"] == "AW_DOG_RL":
+                structure_parts.append(f"🐕 {l.get('dog_team','').split()[-1]} +1.5")
+            else:
+                structure_parts.append(f"📉 U{l['play'].split()[-1]}")
+
+        partial = " — more games qualifying as lines post" if len(legs) < 4 else ""
+        return {
+            "legs": legs,
+            "combined_odds": combined_american,
+            "payout_per_100": round(payout * 100, 2),
+            "structure": " · ".join(structure_parts),
+            "note": f"{len(legs)}-leg ALREADY WINNING — you're ahead before the first pitch{partial}",
+        }
 
     # ── Power Parlay (Overs + Favorites) ─────────────────────────────────────
 

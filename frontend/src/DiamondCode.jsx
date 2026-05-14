@@ -928,6 +928,110 @@ function ParlayCard({ parlay, title, accentColor, icon }) {
   );
 }
 
+function AlreadyWinningCard({ parlay }) {
+  if (!parlay) return null;
+  const hasLegs = parlay.legs && parlay.legs.length > 0;
+  const accent = "#22d3ee";
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, #0a0a0a 0%, #001a1f 100%)",
+      border: `2px solid ${hasLegs ? accent : "#0d2a2f"}`, borderRadius: 10,
+      padding: "18px 20px", marginBottom: 24,
+      boxShadow: hasLegs ? `0 0 28px ${accent}25` : "none",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, color: hasLegs ? accent : "#2a5a60", letterSpacing: 3, fontWeight: 900 }}>
+            🛡️ ALREADY WINNING PARLAY
+          </div>
+          <div style={{ fontSize: 9, color: "#666", marginTop: 4 }}>{parlay.note}</div>
+          {parlay.structure && (
+            <div style={{ fontSize: 9, color: accent, marginTop: 4, fontFamily: "monospace", letterSpacing: 0.5 }}>
+              {parlay.structure}
+            </div>
+          )}
+        </div>
+        {hasLegs && (
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 22, color: accent, fontWeight: 900, fontFamily: "monospace" }}>
+              {parlay.combined_odds}
+            </div>
+            <div style={{ fontSize: 9, color: "#666", fontFamily: "monospace" }}>
+              ${parlay.payout_per_100}/$100
+            </div>
+          </div>
+        )}
+      </div>
+
+      {hasLegs && (
+        <div style={{
+          fontSize: 9, color: "#a5f3fc", marginBottom: 10, lineHeight: 1.5,
+          padding: "10px 12px", background: `${accent}10`, borderRadius: 4,
+          border: `1px solid ${accent}30`,
+        }}>
+          🛡️ YOU'RE IN A WINNING POSITION BEFORE PITCH 1 — Dogs need to <strong>not get blown out</strong> (+1.5 cushion). Unders need scoring to happen <strong>to beat you</strong>.
+        </div>
+      )}
+
+      {!hasLegs && (
+        <div style={{ textAlign: "center", padding: "20px 0", color: "#444", fontSize: 10, letterSpacing: 2, fontFamily: "monospace" }}>
+          ⏳ WAITING FOR LINES — REFRESHES AUTOMATICALLY
+        </div>
+      )}
+
+      {hasLegs && parlay.legs.map((leg, i) => {
+        const isDog = leg.type === "AW_DOG_RL";
+        const legColor = isDog ? "#a78bfa" : "#22d3ee";
+        const rank = leg.rank || (i + 1);
+        const rankColors = { 1: "#00ff87", 2: "#fbbf24", 3: "#fb923c", 4: accent };
+        const rankColor = rankColors[rank] || "#666";
+        return (
+          <div key={i} style={{
+            borderTop: "1px solid #0d2a30",
+            padding: "14px 0",
+            display: "flex", gap: 12, alignItems: "flex-start",
+          }}>
+            <div style={{ flexShrink: 0, textAlign: "center", minWidth: 36 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: "50%",
+                background: rankColor + "20", color: rankColor,
+                border: `2px solid ${rankColor}60`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 14, fontWeight: 900, margin: "0 auto",
+              }}>#{rank}</div>
+              <div style={{ fontSize: 7, color: rankColor, marginTop: 4, fontFamily: "monospace", letterSpacing: 0.5, fontWeight: 700 }}>
+                {leg.rank_label}
+              </div>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, color: legColor, fontWeight: 700 }}>{leg.play}</span>
+                {leg.odds != null && (
+                  <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
+                    {leg.odds > 0 ? `+${leg.odds}` : leg.odds}
+                  </span>
+                )}
+                {leg.best_book && (
+                  <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>{leg.matchup}</div>
+              {leg.difficulty && (
+                <div style={{ fontSize: 9, color: "#a5f3fc", marginTop: 5, fontFamily: "monospace", fontStyle: "italic" }}>
+                  🛡️ {leg.difficulty}
+                </div>
+              )}
+              {leg.reasoning && (
+                <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.4 }}>{leg.reasoning}</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function TeaseCard({ parlay }) {
   if (!parlay?.legs?.length) return null;
   return (
@@ -1393,6 +1497,7 @@ function AIBoard({ aiPicks, allGames }) {
     safe_play, top_unders = [], way_under_candidates = [], top_dogs = [],
     top_overs = [], top_faves = [], parlay = {}, power_parlay = {},
     out_the_park_parlay = {}, way_out_the_park_parlay = {},
+    already_winning_parlay = {},
     nrfi_parlay = {}, f5_under_parlay = {}, team_total_parlay = {},
     rankings = [], watch_list = [], skip_list = [], flagged_lines = [],
   } = aiPicks;
@@ -1483,6 +1588,9 @@ function AIBoard({ aiPicks, allGames }) {
       <ParlayCard parlay={power_parlay} title="BEST PARLAY OF THE DAY" accentColor="#fb7185" icon="🏆" />
 
       {/* NRFI PARLAY (No Run First Inning) */}
+      {/* ALREADY WINNING PARLAY */}
+      <AlreadyWinningCard parlay={already_winning_parlay} />
+
       <ParlayCard parlay={nrfi_parlay} title="NRFI PARLAY — STACKED 1ST INNING UNDERS" accentColor="#facc15" icon="🥚" />
 
       {/* F5 UNDER PARLAY (First 5 innings) */}
