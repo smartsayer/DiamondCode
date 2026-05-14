@@ -27,6 +27,25 @@ _AN_HEADERS = {
 }
 
 
+def _safe_int(v: Any, default: Optional[int] = None) -> Optional[int]:
+    """Coerce v to int, returning default if v is None/missing/placeholder ('-.--', 'N/A', etc.)."""
+    if v is None:
+        return default
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 async def fetch_free_odds(game_date: Optional[date] = None) -> list[dict[str, Any]]:
     """
     Fetch MLB moneylines + totals from Action Network's public scoreboard API.
@@ -84,28 +103,28 @@ def _map_an_game(game: dict) -> Optional[dict[str, Any]]:
         bk_key, bk_title = _AN_BOOKS[book_id]
         markets = []
 
-        # Moneyline (h2h)
-        ml_home = odd.get("ml_home")
-        ml_away = odd.get("ml_away")
+        # Moneyline (h2h) — safe-coerce, skip if placeholder strings
+        ml_home = _safe_int(odd.get("ml_home"))
+        ml_away = _safe_int(odd.get("ml_away"))
         if ml_home is not None and ml_away is not None:
             markets.append({
                 "key": "h2h",
                 "outcomes": [
-                    {"name": away_name, "price": int(ml_away)},
-                    {"name": home_name, "price": int(ml_home)},
+                    {"name": away_name, "price": ml_away},
+                    {"name": home_name, "price": ml_home},
                 ],
             })
 
         # Game total — AN uses "over"/"under" for the juice, "total" for the number
-        total = odd.get("total")
-        over_price = odd.get("over")
-        under_price = odd.get("under")
+        total = _safe_float(odd.get("total"))
+        over_price = _safe_int(odd.get("over"), default=-110)
+        under_price = _safe_int(odd.get("under"), default=-110)
         if total is not None:
             markets.append({
                 "key": "totals",
                 "outcomes": [
-                    {"name": "Over",  "point": float(total), "price": int(over_price or -110)},
-                    {"name": "Under", "point": float(total), "price": int(under_price or -110)},
+                    {"name": "Over",  "point": total, "price": over_price},
+                    {"name": "Under", "point": total, "price": under_price},
                 ],
             })
 
@@ -171,24 +190,24 @@ def _map_espn_event(event: dict) -> Optional[dict[str, Any]]:
     markets = []
     odd = odds_list[0]
 
-    home_ml = (odd.get("homeTeamOdds") or {}).get("moneyLine")
-    away_ml = (odd.get("awayTeamOdds") or {}).get("moneyLine")
+    home_ml = _safe_int((odd.get("homeTeamOdds") or {}).get("moneyLine"))
+    away_ml = _safe_int((odd.get("awayTeamOdds") or {}).get("moneyLine"))
     if home_ml is not None and away_ml is not None:
         markets.append({
             "key": "h2h",
             "outcomes": [
-                {"name": away_name, "price": int(away_ml)},
-                {"name": home_name, "price": int(home_ml)},
+                {"name": away_name, "price": away_ml},
+                {"name": home_name, "price": home_ml},
             ],
         })
 
-    total = odd.get("overUnder")
+    total = _safe_float(odd.get("overUnder"))
     if total is not None:
         markets.append({
             "key": "totals",
             "outcomes": [
-                {"name": "Over",  "point": float(total), "price": -110},
-                {"name": "Under", "point": float(total), "price": -110},
+                {"name": "Over",  "point": total, "price": -110},
+                {"name": "Under", "point": total, "price": -110},
             ],
         })
 
