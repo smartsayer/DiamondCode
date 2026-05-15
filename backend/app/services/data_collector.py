@@ -11,6 +11,7 @@ from app.services.bullpen import BullpenService
 from app.services.team_fatigue import TeamFatigueService
 from app.services.team_offense import TeamOffenseService
 from app.services.line_movement import LineMovementService
+from app.services.opening_lines import OpeningLineCache
 from app.services.platoon_splits import PlatoonSplitsService
 from app.services.dog_score import DogScoreEngine
 from app.services.correlation_engine import CorrelationEngine
@@ -140,6 +141,37 @@ class DataCollector:
         moneyline = self.line_svc.extract_moneyline(
             current_lines, away_team_name, home_team_name, game_state
         )
+
+        # Opening-line snapshot: first time we see a price, lock it as "open"
+        # so the UI can show OPEN → CURRENT movement (sharp-money tell).
+        from datetime import date as _Date
+        _gd = game.get("game_date")
+        if isinstance(_gd, str):
+            try: _gd = _Date.fromisoformat(_gd)
+            except ValueError: _gd = None
+        elif not isinstance(_gd, _Date):
+            _gd = None
+        _curr_total = line_movement.get("current_total") or line_movement.get("closing_total")
+        _curr_aml = moneyline.get("current_away_ml") or moneyline.get("closing_away_ml") or moneyline.get("away_ml")
+        _curr_hml = moneyline.get("current_home_ml") or moneyline.get("closing_home_ml") or moneyline.get("home_ml")
+        opening = OpeningLineCache.snapshot_or_get(
+            game_pk, _gd, _curr_total, _curr_aml, _curr_hml,
+        )
+        line_movement["opening_total"] = opening.get("opening_total")
+        if opening.get("opening_total") is not None and _curr_total is not None:
+            line_movement["total_movement"] = round(_curr_total - opening["opening_total"], 2)
+        else:
+            line_movement["total_movement"] = None
+        moneyline["opening_away_ml"] = opening.get("opening_away_ml")
+        moneyline["opening_home_ml"] = opening.get("opening_home_ml")
+        if opening.get("opening_away_ml") is not None and _curr_aml is not None:
+            moneyline["away_ml_movement"] = round(_curr_aml - opening["opening_away_ml"], 2)
+        else:
+            moneyline["away_ml_movement"] = None
+        if opening.get("opening_home_ml") is not None and _curr_hml is not None:
+            moneyline["home_ml_movement"] = round(_curr_hml - opening["opening_home_ml"], 2)
+        else:
+            moneyline["home_ml_movement"] = None
 
         fatigue_under_avg = (
             away_fatigue.get("under_score", 5.0) + home_fatigue.get("under_score", 5.0)

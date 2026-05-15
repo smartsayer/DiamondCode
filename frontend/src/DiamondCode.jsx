@@ -2117,6 +2117,189 @@ function WhyExpander({ reasons, color = "#00ff87" }) {
   );
 }
 
+// ── Line movement strip (sharp-money tells per game) ────────────────────────
+function LineMovementStrip({
+  openTotal, curTotal, totalMv,
+  openAML, curAML, awayMv,
+  openHML, curHML, homeMv,
+  awayTeam, homeTeam,
+}) {
+  const fmtML = (v) => v == null ? "—" : (v >= 0 ? `+${v}` : `${v}`);
+  const fmtMv = (v) => {
+    if (v == null || v === 0) return null;
+    return v > 0 ? `↑${Math.abs(v)}` : `↓${Math.abs(v)}`;
+  };
+
+  const totalSig = totalMv == null || Math.abs(totalMv) < 0.5
+    ? null
+    : totalMv < 0 ? { text: "SHARP UNDER", color: "#00ff87" }
+                  : { text: "SHARP OVER",  color: "#fbbf24" };
+
+  const awaySig = awayMv == null || Math.abs(awayMv) < 8
+    ? null
+    : awayMv > 0 ? { text: `${awayTeam} drift`, color: "#666" }
+                 : { text: `${awayTeam} steam`, color: "#00ff87" };
+  const homeSig = homeMv == null || Math.abs(homeMv) < 8
+    ? null
+    : homeMv > 0 ? { text: `${homeTeam} drift`, color: "#666" }
+                 : { text: `${homeTeam} steam`, color: "#00ff87" };
+
+  // Nothing tracked yet
+  if (openTotal == null && openAML == null && openHML == null) {
+    return (
+      <div style={{
+        fontSize: 8, color: "#333", letterSpacing: 1.2,
+        padding: "4px 0 8px", borderBottom: "1px dashed #1a1a1a", marginBottom: 8,
+      }}>
+        ⏳ TRACKING OPENING LINE — sharp-money movement will show after a few hours
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center",
+      fontSize: 9, color: "#666", fontFamily: "monospace",
+      padding: "6px 0 8px", borderBottom: "1px dashed #1a1a1a", marginBottom: 8,
+    }}>
+      {/* Total movement */}
+      {openTotal != null && curTotal != null && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ color: "#444" }}>O/U:</span>
+          <span>{openTotal}</span>
+          <span style={{ color: "#333" }}>→</span>
+          <span style={{ color: "#fff" }}>{curTotal}</span>
+          {fmtMv(totalMv) && (
+            <span style={{ color: totalMv < 0 ? "#00ff87" : "#fbbf24", fontWeight: 800 }}>
+              {fmtMv(totalMv)}
+            </span>
+          )}
+          {totalSig && (
+            <span style={{
+              color: totalSig.color, background: totalSig.color + "18",
+              border: `1px solid ${totalSig.color}50`,
+              padding: "1px 5px", borderRadius: 3, fontWeight: 800, letterSpacing: 0.5,
+            }}>⚡ {totalSig.text}</span>
+          )}
+        </div>
+      )}
+
+      {/* ML movement */}
+      {openAML != null && curAML != null && awayMv !== 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ color: "#444" }}>{awayTeam}:</span>
+          <span>{fmtML(openAML)}</span>
+          <span style={{ color: "#333" }}>→</span>
+          <span style={{ color: "#fff" }}>{fmtML(curAML)}</span>
+          {fmtMv(awayMv) && (
+            <span style={{ color: awayMv < 0 ? "#00ff87" : "#fb7185", fontWeight: 700 }}>
+              {fmtMv(awayMv)}
+            </span>
+          )}
+        </div>
+      )}
+      {openHML != null && curHML != null && homeMv !== 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ color: "#444" }}>{homeTeam}:</span>
+          <span>{fmtML(openHML)}</span>
+          <span style={{ color: "#333" }}>→</span>
+          <span style={{ color: "#fff" }}>{fmtML(curHML)}</span>
+          {fmtMv(homeMv) && (
+            <span style={{ color: homeMv < 0 ? "#00ff87" : "#fb7185", fontWeight: 700 }}>
+              {fmtMv(homeMv)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* All quiet */}
+      {totalMv === 0 && awayMv === 0 && homeMv === 0 && (
+        <span style={{ color: "#333" }}>NO MOVEMENT YET</span>
+      )}
+    </div>
+  );
+}
+
+// ── Line Movement Board — every game with movement, sorted by magnitude ─────
+function LineMovementBoard({ games }) {
+  const eligible = (games || [])
+    .filter(g => g.abstract_state === "Preview")
+    .map(g => {
+      const lm = g.line_movement || {};
+      const ml = g.moneyline_data || {};
+      const tmv = lm.total_movement;
+      const amv = ml.away_ml_movement;
+      const hmv = ml.home_ml_movement;
+      const magnitude = Math.max(
+        tmv != null ? Math.abs(tmv) * 10 : 0,    // 1 run weighted as 10 ML cents
+        amv != null ? Math.abs(amv) : 0,
+        hmv != null ? Math.abs(hmv) : 0,
+      );
+      return { g, lm, ml, tmv, amv, hmv, magnitude };
+    })
+    .filter(x => x.magnitude > 0)
+    .sort((a, b) => b.magnitude - a.magnitude);
+
+  if (eligible.length === 0) return null;
+
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, #0a0a0a, #1a1400 80%, #0a0a0a)",
+      border: "2px solid #fbbf2430", borderRadius: 10,
+      padding: "16px 18px", marginBottom: 24,
+    }}>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: "#fbbf24", letterSpacing: 3, fontWeight: 900 }}>
+          📊 LINE MOVEMENT BOARD
+        </div>
+        <div style={{ fontSize: 9, color: "#666", marginTop: 3 }}>
+          Where the lines have moved since opening · sharp-money tells · {eligible.length} games tracking
+        </div>
+      </div>
+      {eligible.map(({ g, lm, ml, tmv, amv, hmv }) => {
+        const totalSig = tmv != null && Math.abs(tmv) >= 0.5
+          ? (tmv < 0 ? { txt: "⚡ SHARP UNDER", color: "#00ff87" }
+                     : { txt: "⚡ SHARP OVER",  color: "#fbbf24" })
+          : null;
+        return (
+          <div key={g.game_pk} style={{
+            background: "#0a0a0a", border: "1px solid #1a1a1a",
+            borderRadius: 6, padding: "10px 12px", marginBottom: 6,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 11, color: "#fff", fontWeight: 700 }}>
+                {g.away_team} @ {g.home_team}
+              </div>
+              {totalSig && (
+                <span style={{
+                  fontSize: 9, color: totalSig.color, background: totalSig.color + "18",
+                  border: `1px solid ${totalSig.color}50`,
+                  padding: "2px 6px", borderRadius: 3, fontWeight: 800, letterSpacing: 0.5,
+                  fontFamily: "monospace",
+                }}>{totalSig.txt}</span>
+              )}
+            </div>
+            <div style={{ fontSize: 9, color: "#666", marginTop: 4, fontFamily: "monospace", display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {tmv != null && tmv !== 0 && (
+                <span>O/U: <span style={{ color: "#888" }}>{lm.opening_total}</span> → <span style={{ color: "#fff" }}>{lm.current_total ?? lm.closing_total}</span> <strong style={{ color: tmv < 0 ? "#00ff87" : "#fbbf24" }}>{tmv > 0 ? `↑${tmv}` : `↓${Math.abs(tmv)}`}</strong></span>
+              )}
+              {amv != null && amv !== 0 && (
+                <span>{g.away_team_abbr || "AWAY"}: <span style={{ color: "#888" }}>{ml.opening_away_ml >= 0 ? `+${ml.opening_away_ml}` : ml.opening_away_ml}</span> → <span style={{ color: "#fff" }}>{(ml.current_away_ml ?? ml.closing_away_ml ?? ml.away_ml) >= 0 ? `+${ml.current_away_ml ?? ml.closing_away_ml ?? ml.away_ml}` : (ml.current_away_ml ?? ml.closing_away_ml ?? ml.away_ml)}</span> <strong style={{ color: amv < 0 ? "#00ff87" : "#fb7185" }}>{amv > 0 ? `↑${amv}` : `↓${Math.abs(amv)}`}</strong></span>
+              )}
+              {hmv != null && hmv !== 0 && (
+                <span>{g.home_team_abbr || "HOME"}: <span style={{ color: "#888" }}>{ml.opening_home_ml >= 0 ? `+${ml.opening_home_ml}` : ml.opening_home_ml}</span> → <span style={{ color: "#fff" }}>{(ml.current_home_ml ?? ml.closing_home_ml ?? ml.home_ml) >= 0 ? `+${ml.current_home_ml ?? ml.closing_home_ml ?? ml.home_ml}` : (ml.current_home_ml ?? ml.closing_home_ml ?? ml.home_ml)}</span> <strong style={{ color: hmv < 0 ? "#00ff87" : "#fb7185" }}>{hmv > 0 ? `↑${hmv}` : `↓${Math.abs(hmv)}`}</strong></span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      <div style={{ fontSize: 8, color: "#333", marginTop: 8, fontStyle: "italic", letterSpacing: 0.5 }}>
+        ↓ DOWN movement on a total = sharp UNDER · ↓ on ML = team improved · ↑ on ML = team got worse
+      </div>
+    </div>
+  );
+}
+
 // ── ATS / Run Line section (favorites -1.5 + dogs +1.5) ─────────────────────
 function RunLinePicks({ topFaves, topDogs }) {
   const ml_to_prob = (ml) => ml >= 0 ? 100 / (ml + 100) : Math.abs(ml) / (Math.abs(ml) + 100);
@@ -2334,12 +2517,20 @@ function BetBuilder({ games }) {
           );
         };
 
+        // Line movement: opening → current
+        const openTotal = lm.opening_total;
+        const totalMv = lm.total_movement;
+        const awayMlMv = ml.away_ml_movement;
+        const homeMlMv = ml.home_ml_movement;
+        const openAML = ml.opening_away_ml;
+        const openHML = ml.opening_home_ml;
+
         return (
           <div key={g.game_pk} style={{
             background: "#0a0a0a", border: "1px solid #1a1a1a",
             borderRadius: 8, padding: "12px", marginBottom: 10,
           }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
               <div style={{ fontSize: 12, color: "#fff", fontWeight: 700 }}>{matchup}</div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {isPitchersDuel && (
@@ -2354,6 +2545,16 @@ function BetBuilder({ games }) {
                 )}
               </div>
             </div>
+
+            {/* Line movement strip — sharp-money signals */}
+            <LineMovementStrip
+              openTotal={openTotal} curTotal={total} totalMv={totalMv}
+              openAML={openAML} curAML={aml} awayMv={awayMlMv}
+              openHML={openHML} curHML={hml} homeMv={homeMlMv}
+              awayTeam={g.away_team_abbr || g.away_team}
+              homeTeam={g.home_team_abbr || g.home_team}
+            />
+
 
             {/* Markets grid */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
@@ -2570,6 +2771,9 @@ function AIBoard({ aiPicks, allGames }) {
 
       {/* BEST EDGE PARLAY — pure signal, highest EV legs regardless of type */}
       <BestEdgeCard parlay={best_edge_parlay} />
+
+      {/* LINE MOVEMENT BOARD — sharp-money tells from opening → current */}
+      <LineMovementBoard games={allGames} />
 
       {/* ATS / RUN LINE — favorites -1.5 + dogs +1.5 ranked by EV */}
       <RunLinePicks topFaves={top_faves} topDogs={top_dogs} />
