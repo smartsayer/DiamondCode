@@ -1,4 +1,130 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, createContext, useContext, useCallback, useMemo } from "react";
+
+// ── Bet Slip context — shared state for click-to-add betting ──────────────────
+const BetSlipContext = createContext(null);
+
+const SLIP_STORAGE_KEY = "diamondcode_betslip_v1";
+const WAGER_STORAGE_KEY = "diamondcode_wager_v1";
+
+function legKey(leg) {
+  return `${leg.matchup || ""}|${leg.play || ""}|${leg.type || ""}`;
+}
+
+function BetSlipProvider({ children }) {
+  const [slip, setSlip] = useState(() => {
+    try {
+      const raw = localStorage.getItem(SLIP_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  });
+  const [wager, setWager] = useState(() => {
+    try { return localStorage.getItem(WAGER_STORAGE_KEY) || "100"; }
+    catch { return "100"; }
+  });
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [flashId, setFlashId] = useState(null);
+
+  useEffect(() => {
+    try { localStorage.setItem(SLIP_STORAGE_KEY, JSON.stringify(slip)); } catch {}
+  }, [slip]);
+  useEffect(() => {
+    try { localStorage.setItem(WAGER_STORAGE_KEY, wager); } catch {}
+  }, [wager]);
+
+  const addLeg = useCallback((leg) => {
+    if (!leg || leg.odds == null) return;
+    const key = legKey(leg);
+    setSlip(prev => {
+      if (prev.some(l => legKey(l) === key)) return prev;  // dedupe
+      const newLeg = {
+        id: `leg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        matchup: leg.matchup || "",
+        play: leg.play || "",
+        odds: typeof leg.odds === "number" ? leg.odds : parseInt(leg.odds, 10),
+        type: leg.type || "",
+        source: leg.source || "",
+        edge: leg.edge ? { tier: leg.edge.tier, edge_pct: leg.edge.edge_pct, color: leg.edge.color, icon: leg.edge.icon } : null,
+      };
+      return [...prev, newLeg];
+    });
+    setFlashId(key);
+    setTimeout(() => setFlashId(null), 700);
+  }, []);
+
+  const removeLeg = useCallback((id) => {
+    setSlip(prev => prev.filter(l => l.id !== id));
+  }, []);
+
+  const removeByKey = useCallback((key) => {
+    setSlip(prev => prev.filter(l => legKey(l) !== key));
+  }, []);
+
+  const clearSlip = useCallback(() => setSlip([]), []);
+  const toggleLeg = useCallback((leg) => {
+    const key = legKey(leg);
+    setSlip(prev => {
+      if (prev.some(l => legKey(l) === key)) {
+        return prev.filter(l => legKey(l) !== key);
+      }
+      // add
+      const newLeg = {
+        id: `leg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        matchup: leg.matchup || "",
+        play: leg.play || "",
+        odds: typeof leg.odds === "number" ? leg.odds : parseInt(leg.odds, 10),
+        type: leg.type || "",
+        source: leg.source || "",
+        edge: leg.edge ? { tier: leg.edge.tier, edge_pct: leg.edge.edge_pct, color: leg.edge.color, icon: leg.edge.icon } : null,
+      };
+      setFlashId(key);
+      setTimeout(() => setFlashId(null), 700);
+      return [...prev, newLeg];
+    });
+  }, []);
+
+  const isInSlip = useCallback((leg) => {
+    if (!leg) return false;
+    return slip.some(l => legKey(l) === legKey(leg));
+  }, [slip]);
+
+  const value = useMemo(() => ({
+    slip, wager, setWager, drawerOpen, setDrawerOpen,
+    addLeg, removeLeg, removeByKey, clearSlip, toggleLeg, isInSlip, flashId,
+  }), [slip, wager, drawerOpen, addLeg, removeLeg, removeByKey, clearSlip, toggleLeg, isInSlip, flashId]);
+
+  return <BetSlipContext.Provider value={value}>{children}</BetSlipContext.Provider>;
+}
+
+function useBetSlip() {
+  const ctx = useContext(BetSlipContext);
+  if (!ctx) return { slip: [], addLeg: () => {}, removeLeg: () => {}, clearSlip: () => {}, toggleLeg: () => {}, isInSlip: () => false, drawerOpen: false, setDrawerOpen: () => {}, wager: "100", setWager: () => {}, flashId: null };
+  return ctx;
+}
+
+// Add-to-slip pill button used inside every leg renderer
+function AddPill({ leg, source, accentColor = "#00ff87" }) {
+  const { toggleLeg, isInSlip } = useBetSlip();
+  const inSlip = isInSlip(leg);
+  if (leg?.odds == null) return null;
+  const handleClick = (e) => {
+    e.stopPropagation();
+    toggleLeg({ ...leg, source });
+  };
+  return (
+    <button onClick={handleClick} title={inSlip ? "Remove from bet slip" : "Add to bet slip"} style={{
+      background: inSlip ? accentColor : `${accentColor}18`,
+      border: `1px solid ${inSlip ? accentColor : accentColor + "60"}`,
+      color: inSlip ? "#000" : accentColor,
+      fontSize: 9, fontWeight: 800, fontFamily: "monospace",
+      padding: "2px 8px", borderRadius: 12, cursor: "pointer",
+      letterSpacing: 1, lineHeight: 1.4,
+      boxShadow: inSlip ? `0 0 6px ${accentColor}80` : "none",
+      transition: "all 0.15s",
+    }}>
+      {inSlip ? "✓ ON SLIP" : "+ ADD"}
+    </button>
+  );
+}
 
 const VERDICT_CONFIG = {
   Lock:     { label: "🔒 LOCK IT",     color: "#00ff87" },
@@ -812,7 +938,7 @@ function LiveTracker({ games }) {
   );
 }
 
-function ParlayCard({ parlay, title, accentColor, icon }) {
+function ParlayCard({ parlay, title, accentColor, icon, source }) {
   if (!parlay) return null;
   const hasLegs = parlay.legs && parlay.legs.length > 0;
   return (
@@ -887,6 +1013,7 @@ function ParlayCard({ parlay, title, accentColor, icon }) {
                 {leg.best_book && (
                   <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
                 )}
+                <AddPill leg={leg} source={source || title} accentColor={accentColor} />
               </div>
               <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
                 {leg.matchup}
@@ -1036,6 +1163,7 @@ function AlreadyWinningCard({ parlay }) {
                 {leg.best_book && (
                   <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
                 )}
+                <AddPill leg={leg} source="Already Winning" accentColor={legColor} />
               </div>
               <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>{leg.matchup}</div>
               {leg.difficulty && (
@@ -1707,6 +1835,7 @@ function BestEdgeCard({ parlay }) {
                         {e.icon} {e.tier} {e.edge_pct > 0 ? `+${e.edge_pct}` : e.edge_pct}%
                       </span>
                     )}
+                    <AddPill leg={leg} source="Best Edge" accentColor={legColor} />
                   </div>
                   <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
                     {leg.matchup}
@@ -1875,6 +2004,7 @@ function OutTheParkCard({ parlay }) {
                         {leg.best_book && (
                           <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
                         )}
+                        <AddPill leg={leg} source="Out The Park" accentColor={legColor} />
                       </div>
                       <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
                         {leg.matchup}
@@ -2025,6 +2155,7 @@ function WayOutTheParkCard({ parlay }) {
                         {leg.best_book && (
                           <span style={{ color: "#60a5fa", fontSize: 9 }}>best @ {leg.best_book}</span>
                         )}
+                        <AddPill leg={leg} source="Way Out The Park" accentColor={legColor} />
                       </div>
                       <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
                         {leg.matchup}
@@ -2130,8 +2261,13 @@ function AIBoard({ aiPicks, allGames }) {
               {safe_play.confidence_label}
             </div>
           </div>
-          <div style={{ fontSize: 18, color: "#fff", fontWeight: 900, marginTop: 4 }}>
-            {safe_play.play}
+          <div style={{ fontSize: 18, color: "#fff", fontWeight: 900, marginTop: 4, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span>{safe_play.play}</span>
+            <AddPill
+              leg={{ matchup: safe_play.matchup, play: safe_play.play, odds: safe_play.odds ?? -110, type: safe_play.type || "UNDER" }}
+              source="Safe Play"
+              accentColor="#00ff87"
+            />
           </div>
           <div style={{ fontSize: 11, color: "#a3e635", fontFamily: "monospace", marginTop: 4 }}>
             {safe_play.matchup}
@@ -2217,9 +2353,16 @@ function AIBoard({ aiPicks, allGames }) {
             <div style={{ fontSize: 13, color: "#fff", fontWeight: 700 }}>
               {w.matchup}
             </div>
-            <div style={{ fontSize: 11, color: "#00ff87", fontFamily: "monospace", fontWeight: 700 }}>
-              UNDER {w.closing_total ?? "TBD"}
-              {w.best_book && <span style={{ color: "#666", marginLeft: 6, fontSize: 9 }}>@ {w.best_book}</span>}
+            <div style={{ fontSize: 11, color: "#00ff87", fontFamily: "monospace", fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+              <span>UNDER {w.closing_total ?? "TBD"}</span>
+              {w.best_book && <span style={{ color: "#666", fontSize: 9 }}>@ {w.best_book}</span>}
+              {w.closing_total != null && (
+                <AddPill
+                  leg={{ matchup: w.matchup, play: `UNDER ${w.closing_total}`, odds: w.best_price ?? -110, type: "UNDER" }}
+                  source="Way Under"
+                  accentColor="#00ff87"
+                />
+              )}
             </div>
           </div>
           <div style={{ fontSize: 9, color: "#00ff87", marginTop: 4, letterSpacing: 1 }}>
@@ -2257,9 +2400,14 @@ function AIBoard({ aiPicks, allGames }) {
                 </span>
               </div>
             </div>
-            <div style={{ fontSize: 10, color: "#666", fontFamily: "monospace", marginTop: 3 }}>
-              UNDER {u.closing_total}
-              {u.best_book && <span style={{ marginLeft: 8 }}>· {u.best_price > 0 ? "+" : ""}{u.best_price} @ {u.best_book}</span>}
+            <div style={{ fontSize: 10, color: "#666", fontFamily: "monospace", marginTop: 3, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>UNDER {u.closing_total}</span>
+              {u.best_book && <span>· {u.best_price > 0 ? "+" : ""}{u.best_price} @ {u.best_book}</span>}
+              <AddPill
+                leg={{ matchup: u.matchup, play: `UNDER ${u.closing_total}`, odds: u.best_price ?? -110, type: "UNDER" }}
+                source="Top Unders"
+                accentColor={color}
+              />
             </div>
             <div style={{ marginTop: 6 }}>
               {u.reasons.map((r, j) => (
@@ -2296,9 +2444,14 @@ function AIBoard({ aiPicks, allGames }) {
                 </span>
               </div>
             </div>
-            <div style={{ fontSize: 10, color: "#666", fontFamily: "monospace", marginTop: 3 }}>
-              {d.matchup}
-              {d.best_book && <span style={{ color: "#a78bfa", marginLeft: 8 }}>best @ {d.best_book}</span>}
+            <div style={{ fontSize: 10, color: "#666", fontFamily: "monospace", marginTop: 3, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>{d.matchup}</span>
+              {d.best_book && <span style={{ color: "#a78bfa" }}>best @ {d.best_book}</span>}
+              <AddPill
+                leg={{ matchup: d.matchup, play: `${d.dog_team} ML`, odds: d.best_price ?? d.moneyline, type: "ML" }}
+                source="Top Dogs"
+                accentColor={color}
+              />
             </div>
             <div style={{ marginTop: 6 }}>
               {d.reasons.map((r, j) => (
@@ -2333,9 +2486,16 @@ function AIBoard({ aiPicks, allGames }) {
                 </span>
               </div>
             </div>
-            <div style={{ fontSize: 10, color: "#666", fontFamily: "monospace", marginTop: 3 }}>
-              OVER {o.closing_total ?? "TBD"}
-              {o.best_book && <span style={{ marginLeft: 8 }}>· {o.best_price > 0 ? "+" : ""}{o.best_price} @ {o.best_book}</span>}
+            <div style={{ fontSize: 10, color: "#666", fontFamily: "monospace", marginTop: 3, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>OVER {o.closing_total ?? "TBD"}</span>
+              {o.best_book && <span>· {o.best_price > 0 ? "+" : ""}{o.best_price} @ {o.best_book}</span>}
+              {o.closing_total != null && (
+                <AddPill
+                  leg={{ matchup: o.matchup, play: `OVER ${o.closing_total}`, odds: o.best_price ?? -110, type: "OVER" }}
+                  source="Top Overs"
+                  accentColor={color}
+                />
+              )}
             </div>
             <div style={{ marginTop: 6 }}>
               {o.reasons.map((r, j) => (
@@ -2374,10 +2534,15 @@ function AIBoard({ aiPicks, allGames }) {
                 </span>
               </div>
             </div>
-            <div style={{ fontSize: 10, color: "#666", fontFamily: "monospace", marginTop: 3 }}>
-              {f.matchup}
-              <span style={{ marginLeft: 8 }}>· {f.implied_pct}% implied</span>
-              {f.best_book && <span style={{ color: "#fb7185", marginLeft: 8 }}>best @ {f.best_book}</span>}
+            <div style={{ fontSize: 10, color: "#666", fontFamily: "monospace", marginTop: 3, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>{f.matchup}</span>
+              <span>· {f.implied_pct}% implied</span>
+              {f.best_book && <span style={{ color: "#fb7185" }}>best @ {f.best_book}</span>}
+              <AddPill
+                leg={{ matchup: f.matchup, play: `${f.fav_team} ML`, odds: f.best_price ?? f.moneyline, type: "ML" }}
+                source="Top Faves"
+                accentColor={color}
+              />
             </div>
             <div style={{ marginTop: 6 }}>
               {f.reasons.map((r, j) => (
@@ -2480,7 +2645,246 @@ function AIBoard({ aiPicks, allGames }) {
 
 // ─── MAIN APP ────────────────────────────────────────────────────────────────
 
-export default function DiamondCode() {
+// ── Floating Bet Slip drawer ─────────────────────────────────────────────────
+function BetSlipFAB() {
+  const { slip, drawerOpen, setDrawerOpen } = useBetSlip();
+  if (drawerOpen) return null;
+  const count = slip.length;
+  return (
+    <button onClick={() => setDrawerOpen(true)} style={{
+      position: "fixed", bottom: 18, right: 18, zIndex: 100,
+      background: count > 0 ? "linear-gradient(135deg, #00ff87, #34d399)" : "#1a1a1a",
+      color: count > 0 ? "#000" : "#666",
+      border: count > 0 ? "2px solid #00ff87" : "2px solid #2a2a2a",
+      borderRadius: 30, padding: "14px 20px",
+      fontSize: 12, fontFamily: "monospace", fontWeight: 900,
+      letterSpacing: 1.5, cursor: "pointer",
+      boxShadow: count > 0 ? "0 6px 24px #00ff8745" : "0 4px 12px #00000060",
+      display: "flex", alignItems: "center", gap: 8,
+      transition: "all 0.2s",
+    }}>
+      🎟️ BET SLIP
+      <span style={{
+        background: count > 0 ? "#000" : "#2a2a2a",
+        color: count > 0 ? "#00ff87" : "#444",
+        borderRadius: "50%", width: 22, height: 22,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        fontSize: 11, fontWeight: 900,
+      }}>{count}</span>
+    </button>
+  );
+}
+
+function BetSlipDrawer() {
+  const { slip, wager, setWager, drawerOpen, setDrawerOpen, removeLeg, clearSlip } = useBetSlip();
+
+  // Math
+  const oddsToDecimal = (am) => am >= 0 ? 1 + am / 100 : 1 + 100 / Math.abs(am);
+  const oddsToProb = (am) => am >= 0 ? 100 / (am + 100) : Math.abs(am) / (Math.abs(am) + 100);
+  const formatAmerican = (dec) => {
+    if (dec <= 1) return "—";
+    const a = dec >= 2 ? Math.round((dec - 1) * 100) : Math.round(-100 / (dec - 1));
+    return a >= 0 ? `+${a}` : `${a}`;
+  };
+
+  const wagerAmt = parseFloat(wager) || 0;
+  const validLegs = slip.filter(l => typeof l.odds === "number" && !isNaN(l.odds));
+  const combinedDecimal = validLegs.reduce((acc, l) => acc * oddsToDecimal(l.odds), 1);
+  const combinedProb = validLegs.reduce((acc, l) => acc * oddsToProb(l.odds), 1);
+  const payout = wagerAmt * combinedDecimal;
+  const profit = payout - wagerAmt;
+
+  const isParlay = validLegs.length >= 2;
+  const isSingle = validLegs.length === 1;
+
+  if (!drawerOpen) return null;
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div onClick={() => setDrawerOpen(false)} style={{
+        position: "fixed", inset: 0, background: "#000000aa", zIndex: 200,
+        backdropFilter: "blur(2px)",
+      }} />
+
+      {/* Drawer */}
+      <div style={{
+        position: "fixed", top: 0, right: 0, bottom: 0,
+        width: "min(420px, 100vw)", zIndex: 201,
+        background: "linear-gradient(180deg, #050505 0%, #0a0a0a 100%)",
+        borderLeft: "1px solid #1a1a1a", boxShadow: "-12px 0 40px #000",
+        display: "flex", flexDirection: "column",
+        fontFamily: "monospace",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "16px 18px",
+          borderBottom: "1px solid #1a1a1a",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          background: "linear-gradient(135deg, #00ff8708, transparent)",
+        }}>
+          <div>
+            <div style={{ fontSize: 14, color: "#00ff87", fontWeight: 900, letterSpacing: 2 }}>
+              🎟️ BET SLIP
+            </div>
+            <div style={{ fontSize: 9, color: "#444", marginTop: 2 }}>
+              {validLegs.length} {validLegs.length === 1 ? "leg" : "legs"} · click any pick to add
+            </div>
+          </div>
+          <button onClick={() => setDrawerOpen(false)} style={{
+            background: "transparent", border: "1px solid #2a2a2a",
+            color: "#666", fontSize: 14, cursor: "pointer",
+            padding: "4px 12px", borderRadius: 4,
+          }}>✕</button>
+        </div>
+
+        {/* Empty state */}
+        {validLegs.length === 0 && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center", color: "#333",
+            padding: "40px 20px", textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 12, opacity: 0.4 }}>🎟️</div>
+            <div style={{ fontSize: 12, color: "#666", letterSpacing: 1.5, fontWeight: 700, marginBottom: 6 }}>
+              SLIP IS EMPTY
+            </div>
+            <div style={{ fontSize: 10, color: "#444", lineHeight: 1.5, maxWidth: 240 }}>
+              Tap <span style={{ color: "#00ff87" }}>+ ADD</span> on any pick — Best Edge, OTP, F5, NRFI, individual unders, dogs, faves — to start building your parlay.
+            </div>
+          </div>
+        )}
+
+        {/* Legs */}
+        {validLegs.length > 0 && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
+            {validLegs.map((leg, i) => {
+              const prob = oddsToProb(leg.odds) * 100;
+              return (
+                <div key={leg.id} style={{
+                  background: "#0a0a0a", border: "1px solid #1a1a1a",
+                  borderRadius: 8, padding: "10px 12px", marginBottom: 8,
+                  display: "flex", flexDirection: "column", gap: 4,
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{
+                      width: 18, height: 18, borderRadius: "50%",
+                      background: "#00ff8720", color: "#00ff87",
+                      fontSize: 9, fontWeight: 900,
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    }}>{i + 1}</span>
+                    <span style={{ fontSize: 12, color: "#fff", fontWeight: 700, flex: 1, minWidth: 0 }}>
+                      {leg.play}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
+                      {leg.odds >= 0 ? `+${leg.odds}` : leg.odds}
+                    </span>
+                    <button onClick={() => removeLeg(leg.id)} style={{
+                      background: "transparent", border: "none",
+                      color: "#444", fontSize: 16, cursor: "pointer",
+                      padding: "0 4px", lineHeight: 1,
+                    }}>×</button>
+                  </div>
+                  <div style={{ fontSize: 9, color: "#555", paddingLeft: 26,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {leg.matchup}
+                  </div>
+                  <div style={{ display: "flex", gap: 10, paddingLeft: 26 }}>
+                    <span style={{ fontSize: 8, color: "#444" }}>{prob.toFixed(1)}% implied</span>
+                    {leg.source && <span style={{ fontSize: 8, color: "#444" }}>· from {leg.source}</span>}
+                    {leg.edge && leg.edge.tier && leg.edge.tier !== "UNPRICED" && (
+                      <span style={{ fontSize: 8, color: leg.edge.color || "#666", fontWeight: 700 }}>
+                        {leg.edge.icon} {leg.edge.tier}
+                        {leg.edge.edge_pct != null ? ` ${leg.edge.edge_pct > 0 ? '+' : ''}${leg.edge.edge_pct}%` : ""}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            <button onClick={clearSlip} style={{
+              width: "100%", marginTop: 6, background: "transparent",
+              border: "1px solid #1a1a1a", color: "#444",
+              fontSize: 9, fontFamily: "monospace", letterSpacing: 1.5,
+              padding: "8px", borderRadius: 6, cursor: "pointer",
+            }}>CLEAR ALL LEGS</button>
+          </div>
+        )}
+
+        {/* Wager + Payout */}
+        {validLegs.length > 0 && (
+          <div style={{ borderTop: "2px solid #1a1a1a", padding: "16px 18px",
+            background: "linear-gradient(180deg, transparent, #00ff8708)" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
+              <span style={{ fontSize: 9, color: "#666", letterSpacing: 2, minWidth: 50 }}>WAGER $</span>
+              <input
+                type="number" min="1" value={wager}
+                onChange={e => setWager(e.target.value)}
+                style={{
+                  flex: 1, background: "#111", border: "1px solid #2a2a2a",
+                  color: "#fbbf24", fontSize: 16, fontWeight: 900,
+                  fontFamily: "monospace", padding: "7px 10px", borderRadius: 5,
+                  outline: "none", maxWidth: 110,
+                }}
+              />
+              <div style={{ display: "flex", gap: 4 }}>
+                {[25, 50, 100, 500].map(v => (
+                  <button key={v} onClick={() => setWager(String(v))} style={{
+                    background: wager == v ? "#1a1a1a" : "transparent",
+                    border: `1px solid ${wager == v ? "#2a2a2a" : "#111"}`,
+                    color: wager == v ? "#fff" : "#444",
+                    fontSize: 9, fontFamily: "monospace",
+                    padding: "3px 8px", borderRadius: 3, cursor: "pointer",
+                  }}>${v}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div style={{ background: "#0a0a0a", border: "1px solid #1a1a1a",
+                borderRadius: 6, padding: "10px 12px", textAlign: "center" }}>
+                <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5, marginBottom: 4 }}>
+                  {isParlay ? "PARLAY ODDS" : "ODDS"}
+                </div>
+                <div style={{ fontSize: 18, color: isParlay ? "#a78bfa" : "#fbbf24",
+                  fontWeight: 900, fontFamily: "monospace", lineHeight: 1 }}>
+                  {formatAmerican(combinedDecimal)}
+                </div>
+                <div style={{ fontSize: 8, color: "#333", marginTop: 3 }}>
+                  {(combinedProb * 100).toFixed(2)}%
+                </div>
+              </div>
+              <div style={{ background: "#0a0a0a", border: "1px solid #00ff8730",
+                borderRadius: 6, padding: "10px 12px", textAlign: "center",
+                boxShadow: "0 0 12px #00ff8715" }}>
+                <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5, marginBottom: 4 }}>
+                  PAYOUT
+                </div>
+                <div style={{ fontSize: 18, color: "#00ff87", fontWeight: 900,
+                  fontFamily: "monospace", lineHeight: 1 }}>
+                  ${payout.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <div style={{ fontSize: 8, color: "#00ff8770", marginTop: 3 }}>
+                  +${profit.toLocaleString(undefined, { maximumFractionDigits: 2 })} profit
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+export default function DiamondCodeApp() {
+  return (
+    <BetSlipProvider>
+      <DiamondCode />
+      <BetSlipFAB />
+      <BetSlipDrawer />
+    </BetSlipProvider>
+  );
+}
+
+function DiamondCode() {
   const [slate, setSlate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -2559,7 +2963,7 @@ export default function DiamondCode() {
     : allGames;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#050505", color: "#e0e0e0", fontFamily: "monospace", padding: "24px 16px", maxWidth: 860, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: "#050505", color: "#e0e0e0", fontFamily: "monospace", padding: "24px 16px 100px", maxWidth: 860, margin: "0 auto" }}>
 
       {/* Header */}
       <div style={{ marginBottom: 24, borderBottom: "1px solid #1a1a1a", paddingBottom: 18 }}>
