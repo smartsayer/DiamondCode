@@ -41,6 +41,7 @@ class AIPicksEngine:
         nrfi_parlay = self._build_nrfi_parlay(clean)
         f5_under_parlay = self._build_f5_under_parlay(clean)
         best_edge_parlay = self._build_best_edge_parlay(top_unders, top_dogs, broad_faves)
+        sharp_parlay = self._build_sharp_parlay(clean)
         rankings = self._rank_full_board(preview, flagged_pks)
         watch_list = self._build_watch_list(clean)
         skip_list = self._build_skip_list(clean)
@@ -87,6 +88,7 @@ class AIPicksEngine:
             "nrfi_parlay": nrfi_parlay,
             "f5_under_parlay": f5_under_parlay,
             "best_edge_parlay": best_edge_parlay,
+            "sharp_parlay": sharp_parlay,
             "rankings": rankings,
             "watch_list": watch_list,
             "skip_list": skip_list,
@@ -1988,6 +1990,107 @@ class AIPicksEngine:
         except (ValueError, AttributeError, TypeError):
             pass
 
+    def _build_sharp_parlay(self, games: list[dict[str, Any]]) -> dict[str, Any]:
+        """
+        Pure follow-the-money parlay. No model overlay — every leg is here
+        because the LINE moved sharply on it (sharps already bet that side).
+
+        Trigger thresholds:
+          • Total moved ≥0.5 runs from open  → SHARP UNDER (or OVER)
+          • ML moved ≥15 cents toward a side → that side is SHARP ML
+        """
+        candidates: list[dict[str, Any]] = []
+
+        for g in games:
+            lm = g.get("line_movement") or {}
+            ml = g.get("moneyline_data") or {}
+            matchup = f"{g.get('away_team')} @ {g.get('home_team')}"
+
+            # ── Total movement (UNDER if dropped, OVER if rose) ──────────────
+            tmv = lm.get("total_movement")
+            cur_total = lm.get("current_total") or lm.get("closing_total")
+            open_total = lm.get("opening_total")
+            if tmv is not None and abs(tmv) >= 0.5 and cur_total is not None:
+                side = "UNDER" if tmv < 0 else "OVER"
+                candidates.append({
+                    "game_pk": g.get("game_pk"),
+                    "matchup": matchup,
+                    "play": f"{side} {cur_total}",
+                    "type": f"SHARP_{side}",
+                    "odds": -110,
+                    "magnitude": abs(tmv) * 10,   # 1 run = 10 ML cents weight
+                    "movement_text": f"{open_total} → {cur_total} (moved {tmv:+.1f})",
+                    "reasoning": f"Total dropped {abs(tmv):.1f} runs since open — sharp money on {side.lower()}" if tmv < 0
+                                 else f"Total rose {abs(tmv):.1f} runs since open — sharp money on the {side.lower()}",
+                })
+
+            # ── ML movement (ML got more expensive = sharp came in on that side) ─
+            amv = ml.get("away_ml_movement")
+            hmv = ml.get("home_ml_movement")
+            cur_aml = ml.get("current_away_ml") or ml.get("closing_away_ml") or ml.get("away_ml")
+            cur_hml = ml.get("current_home_ml") or ml.get("closing_home_ml") or ml.get("home_ml")
+            open_aml = ml.get("opening_away_ml")
+            open_hml = ml.get("opening_home_ml")
+
+            # Away ML got more expensive (number went down → more negative or less positive)
+            if amv is not None and amv <= -15 and cur_aml is not None:
+                away_team = g.get("away_team", "Away")
+                candidates.append({
+                    "game_pk": g.get("game_pk"),
+                    "matchup": matchup,
+                    "play": f"{away_team} ML",
+                    "type": "SHARP_ML",
+                    "odds": cur_aml,
+                    "magnitude": abs(amv),
+                    "movement_text": f"{open_aml:+d} → {cur_aml:+d} (moved {amv:+.0f})" if open_aml else f"now {cur_aml:+d}",
+                    "reasoning": f"{away_team} ML moved {abs(amv):.0f} cents toward fav — sharp money on the away side",
+                })
+            if hmv is not None and hmv <= -15 and cur_hml is not None:
+                home_team = g.get("home_team", "Home")
+                candidates.append({
+                    "game_pk": g.get("game_pk"),
+                    "matchup": matchup,
+                    "play": f"{home_team} ML",
+                    "type": "SHARP_ML",
+                    "odds": cur_hml,
+                    "magnitude": abs(hmv),
+                    "movement_text": f"{open_hml:+d} → {cur_hml:+d} (moved {hmv:+.0f})" if open_hml else f"now {cur_hml:+d}",
+                    "reasoning": f"{home_team} ML moved {abs(hmv):.0f} cents toward fav — sharp money on the home side",
+                })
+
+        if not candidates:
+            return {
+                "legs": [], "combined_odds": "—", "payout_per_100": 0,
+                "structure": "",
+                "note": "No sharp movement yet — opening lines are still being snapshotted. Check back as sportsbooks reprice.",
+            }
+
+        # Dedupe by game (keep biggest signal per matchup), sort by magnitude
+        candidates.sort(key=lambda x: x["magnitude"], reverse=True)
+        seen: set = set()
+        top: list[dict] = []
+        for c in candidates:
+            gk = c.get("game_pk")
+            if gk in seen:
+                continue
+            seen.add(gk)
+            c["rank"] = len(top) + 1
+            c["rank_label"] = "STEAM" if c["magnitude"] >= 15 else "SHARP" if c["magnitude"] >= 8 else "DRIFT"
+            top.append(c)
+            if len(top) == 4:
+                break
+
+        combined, payout = self._calc_parlay_odds([l["odds"] for l in top])
+        structure = " · ".join(f"#{l['rank']} {l['play'].split()[0]}" for l in top)
+
+        return {
+            "legs": top,
+            "combined_odds": combined,
+            "payout_per_100": round(payout * 100, 2),
+            "structure": structure,
+            "note": f"{len(top)}-leg sharp-money stack · pure follow-the-line play · no model overlay",
+        }
+
     def _build_best_edge_parlay(
         self,
         top_unders: list[dict[str, Any]],
@@ -2163,6 +2266,7 @@ class AIPicksEngine:
             "nrfi_parlay": empty_parlay,
             "f5_under_parlay": empty_parlay,
             "best_edge_parlay": empty_parlay,
+            "sharp_parlay": empty_parlay,
             "rankings": [],
             "watch_list": [],
             "skip_list": [],

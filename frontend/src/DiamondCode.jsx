@@ -2117,6 +2117,145 @@ function WhyExpander({ reasons, color = "#00ff87" }) {
   );
 }
 
+// ── Sharp Money Parlay — every leg is here because the LINE moved ───────────
+function SharpParlayCard({ parlay }) {
+  if (!parlay) return null;
+  const legs = parlay.legs || [];
+  const hasLegs = legs.length > 0;
+  const accent = "#fbbf24";
+
+  // Always show 4 slots
+  const SLOTS = [1, 2, 3, 4].map((n, i) => legs[i] ? legs[i] : { _tbd: true, rank: n });
+
+  const labelColor = (label) =>
+    label === "STEAM" ? "#fb7185"
+    : label === "SHARP" ? "#fbbf24"
+    : "#a78bfa";
+
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, #0a0a0a, #1a1100 60%, #0a0a0a)",
+      border: `2px solid ${hasLegs ? accent : "#2a2000"}`, borderRadius: 10,
+      padding: "18px 20px", marginBottom: 24,
+      boxShadow: hasLegs ? `0 0 32px ${accent}30` : "none",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, color: hasLegs ? accent : "#555", letterSpacing: 3, fontWeight: 900 }}>
+            💰 SHARP MONEY PARLAY
+          </div>
+          <div style={{ fontSize: 9, color: "#666", marginTop: 4 }}>
+            Pure follow-the-line — every leg picked because sharps already moved the price
+          </div>
+          {parlay.note && !hasLegs && (
+            <div style={{ fontSize: 8, color: "#444", marginTop: 6, fontStyle: "italic" }}>
+              {parlay.note}
+            </div>
+          )}
+        </div>
+        {hasLegs && (
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 26, color: accent, fontWeight: 900, fontFamily: "monospace", textShadow: `0 0 12px ${accent}50` }}>
+              {parlay.combined_odds}
+            </div>
+            <div style={{ fontSize: 9, color: "#666", fontFamily: "monospace" }}>
+              ${parlay.payout_per_100?.toLocaleString()}/$100
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Banner */}
+      {hasLegs && (
+        <div style={{
+          fontSize: 9, color: "#fde68a", marginBottom: 10, lineHeight: 1.5,
+          padding: "8px 12px", background: `${accent}10`, borderRadius: 4,
+          border: `1px solid ${accent}30`,
+        }}>
+          ⚡ <strong>FADE THE PUBLIC, FOLLOW THE MONEY</strong> — every leg here is on a side
+          where the sportsbooks moved the line in response to professional bettors. No model overlay,
+          no public consensus — just pure line-movement signal.
+        </div>
+      )}
+
+      {/* Legs */}
+      {SLOTS.map((leg, i) => {
+        const isUnder = leg.type?.includes("UNDER");
+        const isOver = leg.type?.includes("OVER");
+        const isML = leg.type === "SHARP_ML";
+        const legColor = leg._tbd ? "#333"
+          : isUnder ? "#00ff87"
+          : isOver ? "#fbbf24"
+          : "#a78bfa";
+        const rank = leg.rank || (i + 1);
+        const rlColor = leg._tbd ? "#333" : labelColor(leg.rank_label);
+
+        return (
+          <div key={i} style={{
+            borderTop: "1px solid #1a1a1a",
+            padding: "13px 0",
+            display: "flex", gap: 12, alignItems: "flex-start",
+            background: leg._tbd ? "#ffffff03" : `${legColor}07`,
+            borderLeft: `2px solid ${leg._tbd ? "#333" : legColor + "40"}`,
+            paddingLeft: 10, borderRadius: "0 4px 4px 0", marginBottom: 2,
+            opacity: leg._tbd ? 0.4 : 1,
+          }}>
+            <div style={{ flexShrink: 0, textAlign: "center", minWidth: 40 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: "50%",
+                background: legColor + "20", color: legColor,
+                border: `2px solid ${legColor}60`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 13, fontWeight: 900, margin: "0 auto",
+              }}>#{rank}</div>
+              {!leg._tbd && (
+                <div style={{
+                  fontSize: 7, color: rlColor, marginTop: 4,
+                  fontFamily: "monospace", letterSpacing: 0.5, fontWeight: 700,
+                }}>
+                  ⚡ {leg.rank_label}
+                </div>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {leg._tbd ? (
+                <div style={{ fontSize: 12, color: "#555", fontFamily: "monospace", letterSpacing: 2, paddingTop: 6 }}>
+                  ⏳ AWAITING MOVEMENT — UPDATES AS LINES SHIFT
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: legColor, fontWeight: 700 }}>{leg.play}</span>
+                    {leg.odds != null && (
+                      <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
+                        {leg.odds >= 0 ? `+${leg.odds}` : leg.odds}
+                      </span>
+                    )}
+                    <AddPill leg={leg} source="Sharp Money" accentColor={legColor} />
+                  </div>
+                  <div style={{ fontSize: 10, color: "#666", marginTop: 2, fontFamily: "monospace" }}>
+                    {leg.matchup}
+                  </div>
+                  {leg.movement_text && (
+                    <div style={{ fontSize: 9, color: legColor, marginTop: 4, fontFamily: "monospace", letterSpacing: 0.5 }}>
+                      📈 {leg.movement_text}
+                    </div>
+                  )}
+                  {leg.reasoning && (
+                    <div style={{ fontSize: 9, color: "#999", marginTop: 3, lineHeight: 1.4, fontStyle: "italic" }}>
+                      {leg.reasoning}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Line movement strip (sharp-money tells per game) ────────────────────────
 function LineMovementStrip({
   openTotal, curTotal, totalMv,
@@ -2678,7 +2817,7 @@ function AIBoard({ aiPicks, allGames }) {
     out_the_park_parlay = {}, way_out_the_park_parlay = {},
     already_winning_parlay = {},
     nrfi_parlay = {}, f5_under_parlay = {},
-    best_edge_parlay = {},
+    best_edge_parlay = {}, sharp_parlay = {},
     rankings = [], watch_list = [], skip_list = [], flagged_lines = [],
   } = aiPicks;
 
@@ -2771,6 +2910,9 @@ function AIBoard({ aiPicks, allGames }) {
 
       {/* BEST EDGE PARLAY — pure signal, highest EV legs regardless of type */}
       <BestEdgeCard parlay={best_edge_parlay} />
+
+      {/* SHARP MONEY PARLAY — pure follow-the-line, no model overlay */}
+      <SharpParlayCard parlay={sharp_parlay} />
 
       {/* LINE MOVEMENT BOARD — sharp-money tells from opening → current */}
       <LineMovementBoard games={allGames} />
