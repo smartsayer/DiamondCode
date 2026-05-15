@@ -2117,6 +2117,310 @@ function WhyExpander({ reasons, color = "#00ff87" }) {
   );
 }
 
+// ── ATS / Run Line section (favorites -1.5 + dogs +1.5) ─────────────────────
+function RunLinePicks({ topFaves, topDogs }) {
+  const ml_to_prob = (ml) => ml >= 0 ? 100 / (ml + 100) : Math.abs(ml) / (Math.abs(ml) + 100);
+  const american_to_decimal = (ml) => ml >= 0 ? 1 + ml / 100 : 1 + 100 / Math.abs(ml);
+
+  // Estimate fav -1.5 RL odds from ML (typical books shift ~+125-160)
+  const estimateFavRL = (ml) => {
+    if (ml == null) return null;
+    const p = ml_to_prob(ml);
+    const rlProb = Math.max(0.20, p - 0.18);    // -1.5 cuts ~18% off
+    return rlProb >= 0.5 ? Math.round(-100 * rlProb / (1 - rlProb)) : Math.round(100 * (1 - rlProb) / rlProb);
+  };
+  const estimateDogRL = (ml) => {
+    if (ml == null) return null;
+    const p = ml_to_prob(ml);
+    const rlProb = Math.min(0.92, p + 0.20);    // +1.5 adds ~20%
+    return rlProb >= 0.5 ? Math.round(-100 * rlProb / (1 - rlProb)) : Math.round(100 * (1 - rlProb) / rlProb);
+  };
+
+  // Score each pick: edge of model_prob vs estimated RL odds
+  const scoreFav = (f) => {
+    const ml = f.moneyline;
+    if (ml == null) return null;
+    const baseProb = ml_to_prob(ml);
+    const ourProb = Math.max(0.10, Math.min(0.65, baseProb - 0.18 + (f.fav_score - 50) * 0.0014));
+    const rlOdds = estimateFavRL(ml);
+    const dec = american_to_decimal(rlOdds);
+    const ev = (ourProb * dec - 1) * 100;
+    return { rlOdds, ev, ourProb };
+  };
+  const scoreDog = (d) => {
+    const ml = d.moneyline;
+    if (ml == null) return null;
+    const winProb = ml_to_prob(ml);
+    const ourProb = Math.max(0.50, Math.min(0.92, winProb + 0.20 + (d.dog_score - 50) * 0.0010));
+    const rlOdds = estimateDogRL(ml);
+    const dec = american_to_decimal(rlOdds);
+    const ev = (ourProb * dec - 1) * 100;
+    return { rlOdds, ev, ourProb };
+  };
+
+  const favLines = (topFaves || [])
+    .map(f => ({ ...f, _ats: scoreFav(f), side: "fav" }))
+    .filter(f => f._ats != null)
+    .sort((a, b) => b._ats.ev - a._ats.ev);
+
+  const dogLines = (topDogs || [])
+    .map(d => ({ ...d, _ats: scoreDog(d), side: "dog" }))
+    .filter(d => d._ats != null)
+    .sort((a, b) => b._ats.ev - a._ats.ev);
+
+  if (!favLines.length && !dogLines.length) return null;
+
+  const tierFor = (ev) =>
+    ev >= 8 ? { tier: "CRUSH", color: "#00ff87", icon: "💎" }
+    : ev >= 3 ? { tier: "EDGE", color: "#a3e635", icon: "📈" }
+    : ev >= 0 ? { tier: "FAIR", color: "#fbbf24", icon: "⚖️" }
+    : { tier: "PASS", color: "#666", icon: "🚫" };
+
+  const RLRow = ({ pick }) => {
+    const ats = pick._ats;
+    const t = tierFor(ats.ev);
+    const isFav = pick.side === "fav";
+    const team = isFav ? pick.fav_team : pick.dog_team;
+    const play = `${team} ${isFav ? "-1.5" : "+1.5"} RL`;
+    return (
+      <div style={{
+        background: "#0a0a0a", border: `1px solid ${t.color}30`,
+        borderRadius: 8, padding: "12px 14px", marginBottom: 8,
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div>
+            <div style={{ fontSize: 13, color: "#fff", fontWeight: 700 }}>
+              {team} <span style={{ color: t.color, fontSize: 11 }}>{isFav ? "-1.5" : "+1.5"}</span>
+            </div>
+            <div style={{ fontSize: 9, color: "#666", marginTop: 2 }}>{pick.matchup}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 13, color: "#fbbf24", fontFamily: "monospace", fontWeight: 800 }}>
+              {ats.rlOdds >= 0 ? `+${ats.rlOdds}` : ats.rlOdds}
+            </span>
+            <span style={{
+              fontSize: 9, color: t.color, background: `${t.color}18`,
+              border: `1px solid ${t.color}50`, padding: "2px 6px", borderRadius: 3,
+              fontFamily: "monospace", fontWeight: 800, letterSpacing: 0.5,
+            }}>
+              {t.icon} {t.tier} {ats.ev >= 0 ? `+${ats.ev.toFixed(1)}` : ats.ev.toFixed(1)}%
+            </span>
+            <AddPill
+              leg={{ matchup: pick.matchup, play, odds: ats.rlOdds, type: isFav ? "FAV_RL" : "DOG_RL" }}
+              source="ATS / Run Line"
+              accentColor={t.color}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{
+      background: "#080808", border: "1px solid #1a1a1a",
+      borderRadius: 10, padding: "16px 18px", marginBottom: 24,
+    }}>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: "#a3e635", letterSpacing: 3, fontWeight: 900 }}>
+          📏 ATS / RUN LINE PLAYS
+        </div>
+        <div style={{ fontSize: 9, color: "#444", marginTop: 3 }}>
+          Favorites covering -1.5 · dogs +1.5 cushion · ranked by estimated EV
+        </div>
+      </div>
+      {favLines.length > 0 && (
+        <>
+          <div style={{ fontSize: 8, color: "#fb7185", letterSpacing: 2, fontWeight: 700, margin: "10px 0 6px" }}>
+            ⭐ FAVORITES -1.5
+          </div>
+          {favLines.slice(0, 4).map((p, i) => <RLRow key={`f-${i}`} pick={p} />)}
+        </>
+      )}
+      {dogLines.length > 0 && (
+        <>
+          <div style={{ fontSize: 8, color: "#a78bfa", letterSpacing: 2, fontWeight: 700, margin: "12px 0 6px" }}>
+            🐕 DOGS +1.5
+          </div>
+          {dogLines.slice(0, 4).map((p, i) => <RLRow key={`d-${i}`} pick={p} />)}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Bet Builder — game-by-game ML/RL/Total tap-to-add ────────────────────────
+function BetBuilder({ games }) {
+  const eligible = (games || []).filter(g => {
+    const ml = g.moneyline_data || {};
+    const lm = g.line_movement || {};
+    const hasML = (ml.closing_away_ml ?? ml.away_ml) != null && (ml.closing_home_ml ?? ml.home_ml) != null;
+    const hasTotal = (lm.closing_total ?? lm.current_total) != null;
+    return g.abstract_state === "Preview" && (hasML || hasTotal);
+  });
+
+  if (eligible.length === 0) return null;
+
+  // Estimate RL odds from ML (same heuristic as RunLinePicks)
+  const ml_to_prob = (ml) => ml >= 0 ? 100 / (ml + 100) : Math.abs(ml) / (Math.abs(ml) + 100);
+  const probToAmerican = (p) => p >= 0.5 ? Math.round(-100 * p / (1 - p)) : Math.round(100 * (1 - p) / p);
+  const favRL = (ml) => probToAmerican(Math.max(0.20, ml_to_prob(ml) - 0.18));
+  const dogRL = (ml) => probToAmerican(Math.min(0.92, ml_to_prob(ml) + 0.20));
+
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, #0a0a0a, #001a14 80%, #0a0a0a)",
+      border: "2px solid #00ff8730", borderRadius: 10,
+      padding: "18px 20px", marginBottom: 24,
+    }}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: "#00ff87", letterSpacing: 3, fontWeight: 900 }}>
+          🎯 BUILD YOUR OWN PARLAY
+        </div>
+        <div style={{ fontSize: 9, color: "#666", marginTop: 4 }}>
+          Tap any line to add to your slip · ML · RL · TOTAL · {eligible.length} games with lines posted
+        </div>
+      </div>
+
+      {eligible.map(g => {
+        const ml = g.moneyline_data || {};
+        const lm = g.line_movement || {};
+        const aml = ml.closing_away_ml ?? ml.away_ml;
+        const hml = ml.closing_home_ml ?? ml.home_ml;
+        const total = lm.closing_total ?? lm.current_total;
+        const matchup = `${g.away_team} @ ${g.home_team}`;
+        const isAwayFav = aml != null && hml != null && aml < hml;
+        const favTeam = isAwayFav ? g.away_team : g.home_team;
+        const dogTeam = isAwayFav ? g.home_team : g.away_team;
+        const favML = isAwayFav ? aml : hml;
+        const dogML = isAwayFav ? hml : aml;
+        const favRLOdds = favML != null ? favRL(favML) : null;
+        const dogRLOdds = dogML != null ? dogRL(dogML) : null;
+        const isPitchersDuel = (g.total_score ?? 0) >= 65;
+        const isShootout = (g.total_score ?? 0) <= 35 && total != null && total >= 9;
+
+        const Btn = ({ label, sub, odds, leg, color = "#00ff87" }) => {
+          const { addLeg, isInSlip } = useBetSlip();
+          const inSlip = isInSlip(leg);
+          if (odds == null) {
+            return (
+              <button disabled style={{
+                background: "#0a0a0a", border: "1px dashed #1a1a1a",
+                color: "#333", padding: "8px 4px", borderRadius: 5,
+                fontSize: 9, fontFamily: "monospace", cursor: "not-allowed",
+                display: "flex", flexDirection: "column", gap: 2, alignItems: "center",
+                minHeight: 46,
+              }}>
+                <div>{label}</div>
+                <div style={{ fontSize: 8 }}>—</div>
+              </button>
+            );
+          }
+          return (
+            <button onClick={() => addLeg({ ...leg, source: "Bet Builder" })} style={{
+              background: inSlip ? color : "#0d0d0d",
+              border: `1px solid ${inSlip ? color : color + "40"}`,
+              color: inSlip ? "#000" : "#ddd",
+              padding: "8px 4px", borderRadius: 5,
+              fontSize: 10, fontFamily: "monospace", cursor: "pointer",
+              display: "flex", flexDirection: "column", gap: 2, alignItems: "center",
+              fontWeight: 700, transition: "all 0.15s",
+            }} title={`Add ${label} to slip`}>
+              <div style={{ fontSize: 9, opacity: 0.85 }}>{sub}</div>
+              <div style={{ fontWeight: 900, color: inSlip ? "#000" : "#fbbf24" }}>
+                {odds >= 0 ? `+${odds}` : odds}
+              </div>
+            </button>
+          );
+        };
+
+        return (
+          <div key={g.game_pk} style={{
+            background: "#0a0a0a", border: "1px solid #1a1a1a",
+            borderRadius: 8, padding: "12px", marginBottom: 10,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "#fff", fontWeight: 700 }}>{matchup}</div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {isPitchersDuel && (
+                  <span style={{ fontSize: 8, color: "#00ff87", background: "#00ff8715",
+                    border: "1px solid #00ff8740", padding: "1px 5px", borderRadius: 3,
+                    fontFamily: "monospace", fontWeight: 700 }}>U-LEAN</span>
+                )}
+                {isShootout && (
+                  <span style={{ fontSize: 8, color: "#fbbf24", background: "#fbbf2415",
+                    border: "1px solid #fbbf2440", padding: "1px 5px", borderRadius: 3,
+                    fontFamily: "monospace", fontWeight: 700 }}>O-LEAN</span>
+                )}
+              </div>
+            </div>
+
+            {/* Markets grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              {/* ML column */}
+              <div>
+                <div style={{ fontSize: 7, color: "#444", letterSpacing: 1.5, marginBottom: 4, textAlign: "center" }}>MONEYLINE</div>
+                <div style={{ display: "grid", gridTemplateRows: "1fr 1fr", gap: 4 }}>
+                  <Btn
+                    label="Away" sub={g.away_team_abbr || "AWAY"}
+                    odds={aml}
+                    leg={{ matchup, play: `${g.away_team} ML`, odds: aml, type: "ML" }}
+                    color="#fb7185"
+                  />
+                  <Btn
+                    label="Home" sub={g.home_team_abbr || "HOME"}
+                    odds={hml}
+                    leg={{ matchup, play: `${g.home_team} ML`, odds: hml, type: "ML" }}
+                    color="#fb7185"
+                  />
+                </div>
+              </div>
+
+              {/* RL column */}
+              <div>
+                <div style={{ fontSize: 7, color: "#444", letterSpacing: 1.5, marginBottom: 4, textAlign: "center" }}>RUN LINE</div>
+                <div style={{ display: "grid", gridTemplateRows: "1fr 1fr", gap: 4 }}>
+                  <Btn
+                    label="Fav -1.5" sub={`${favTeam ? favTeam.split(" ").pop() : "FAV"} -1.5`}
+                    odds={favRLOdds}
+                    leg={{ matchup, play: `${favTeam} -1.5 RL`, odds: favRLOdds, type: "FAV_RL" }}
+                    color="#a3e635"
+                  />
+                  <Btn
+                    label="Dog +1.5" sub={`${dogTeam ? dogTeam.split(" ").pop() : "DOG"} +1.5`}
+                    odds={dogRLOdds}
+                    leg={{ matchup, play: `${dogTeam} +1.5 RL`, odds: dogRLOdds, type: "DOG_RL" }}
+                    color="#a78bfa"
+                  />
+                </div>
+              </div>
+
+              {/* TOTAL column */}
+              <div>
+                <div style={{ fontSize: 7, color: "#444", letterSpacing: 1.5, marginBottom: 4, textAlign: "center" }}>TOTAL {total != null && `(${total})`}</div>
+                <div style={{ display: "grid", gridTemplateRows: "1fr 1fr", gap: 4 }}>
+                  <Btn
+                    label="Over" sub={`O ${total ?? "—"}`}
+                    odds={total != null ? -110 : null}
+                    leg={{ matchup, play: `OVER ${total}`, odds: -110, type: "OVER" }}
+                    color="#fbbf24"
+                  />
+                  <Btn
+                    label="Under" sub={`U ${total ?? "—"}`}
+                    odds={total != null ? -110 : null}
+                    leg={{ matchup, play: `UNDER ${total}`, odds: -110, type: "UNDER" }}
+                    color="#00ff87"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Collapsible section wrapper — used to hide secondary parlay models
 function CollapsibleSection({ title, subtitle, defaultOpen = false, children }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -2266,6 +2570,12 @@ function AIBoard({ aiPicks, allGames }) {
 
       {/* BEST EDGE PARLAY — pure signal, highest EV legs regardless of type */}
       <BestEdgeCard parlay={best_edge_parlay} />
+
+      {/* ATS / RUN LINE — favorites -1.5 + dogs +1.5 ranked by EV */}
+      <RunLinePicks topFaves={top_faves} topDogs={top_dogs} />
+
+      {/* BUILD YOUR OWN PARLAY — game-by-game ML/RL/Total tap-to-add */}
+      <BetBuilder games={allGames} />
 
       {/* MORE PARLAYS — collapsed by default to cut noise */}
       <CollapsibleSection title="🎟️ MORE PARLAY MODELS" subtitle="F5 · NRFI · OTP · WOTP · Value · Power · Already Winning">
