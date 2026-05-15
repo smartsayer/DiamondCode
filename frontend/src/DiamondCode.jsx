@@ -101,6 +101,65 @@ function useBetSlip() {
   return ctx;
 }
 
+// ── Placed-bet tracker (auto-saves to localStorage, manual W/L mark) ─────────
+const PLACED_KEY = "diamondcode_placed_v1";
+
+function loadPlaced() {
+  try { return JSON.parse(localStorage.getItem(PLACED_KEY) || "[]"); }
+  catch { return []; }
+}
+
+function savePlaced(list) {
+  try { localStorage.setItem(PLACED_KEY, JSON.stringify(list)); } catch {}
+}
+
+// Trigger a custom event so all subscribers re-read
+function emitPlacedChange() {
+  window.dispatchEvent(new CustomEvent("diamondcode_placed_changed"));
+}
+
+function usePlaced() {
+  const [placed, setPlaced] = useState(loadPlaced);
+  useEffect(() => {
+    const reload = () => setPlaced(loadPlaced());
+    window.addEventListener("diamondcode_placed_changed", reload);
+    return () => window.removeEventListener("diamondcode_placed_changed", reload);
+  }, []);
+  const placeBet = (legs, wager) => {
+    if (!legs.length) return;
+    const list = loadPlaced();
+    list.unshift({
+      id: `bet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      placedAt: new Date().toISOString(),
+      legs: legs.map(l => ({ ...l })),
+      wager: parseFloat(wager) || 0,
+      status: "PENDING",   // PENDING | WON | LOST | PUSH
+    });
+    savePlaced(list);
+    emitPlacedChange();
+  };
+  const updateStatus = (id, status) => {
+    const list = loadPlaced().map(b => b.id === id ? { ...b, status, settledAt: new Date().toISOString() } : b);
+    savePlaced(list);
+    emitPlacedChange();
+  };
+  const removePlaced = (id) => {
+    savePlaced(loadPlaced().filter(b => b.id !== id));
+    emitPlacedChange();
+  };
+  const clearAllPlaced = () => { savePlaced([]); emitPlacedChange(); };
+  return { placed, placeBet, updateStatus, removePlaced, clearAllPlaced };
+}
+
+// Compute parlay decimal odds (and resulting payout) from leg list
+function parlayOdds(legs) {
+  return legs.reduce((acc, l) => {
+    const o = typeof l.odds === "number" ? l.odds : parseInt(l.odds, 10);
+    if (isNaN(o)) return acc;
+    return acc * (o >= 0 ? 1 + o / 100 : 1 + 100 / Math.abs(o));
+  }, 1);
+}
+
 // Add-to-slip pill button used inside every leg renderer
 function AddPill({ leg, source, accentColor = "#00ff87" }) {
   const { toggleLeg, isInSlip } = useBetSlip();
@@ -1861,6 +1920,235 @@ function TierChip({ tier }) {
   );
 }
 
+// ── Hero pick: today's biggest single mispricing ─────────────────────────────
+function HeroPickCard({ aiPicks }) {
+  const bep = aiPicks?.best_edge_parlay;
+  if (!bep || !bep.legs || bep.legs.length === 0) return null;
+  const leg = bep.legs[0];
+  const e = leg.edge || {};
+  if (e.tier === "UNPRICED" || e.edge_pct == null) return null;
+
+  const tierColor = e.color || "#fbbf24";
+  const evPct = e.edge_pct;
+  const ourProb = e.our_prob != null ? (e.our_prob * 100).toFixed(1) : null;
+  const fairOdds = e.our_fair_odds;
+
+  const { addLeg, isInSlip } = useBetSlip();
+  const inSlip = isInSlip({ matchup: leg.matchup, play: leg.play, type: leg.type });
+
+  return (
+    <div style={{
+      background: `linear-gradient(135deg, #050505, ${tierColor}10 60%, #050505)`,
+      border: `2px solid ${tierColor}`,
+      borderRadius: 12, padding: "22px 24px", marginBottom: 24,
+      boxShadow: `0 0 40px ${tierColor}30`,
+      position: "relative", overflow: "hidden",
+    }}>
+      <div style={{
+        position: "absolute", top: 0, right: 0,
+        background: tierColor, color: "#000",
+        fontSize: 9, fontWeight: 900, letterSpacing: 2,
+        padding: "4px 12px", borderBottomLeftRadius: 8,
+      }}>
+        {e.icon} BIGGEST MISPRICE
+      </div>
+
+      <div style={{ fontSize: 9, color: tierColor, letterSpacing: 3, fontWeight: 900, marginBottom: 4 }}>
+        🎯 TODAY'S SHARPEST EDGE
+      </div>
+      <div style={{ fontSize: 10, color: "#666", marginBottom: 14 }}>
+        Single biggest gap between book and model on the slate
+      </div>
+
+      <div style={{ fontSize: 28, color: "#fff", fontWeight: 900, lineHeight: 1.1, marginBottom: 6 }}>
+        {leg.play}
+      </div>
+      <div style={{ fontSize: 12, color: "#888", fontFamily: "monospace", marginBottom: 16 }}>
+        {leg.matchup}
+      </div>
+
+      {/* Big numbers row */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
+        <div style={{ background: "#0a0a0a", borderRadius: 6, padding: "10px 12px", border: "1px solid #1a1a1a" }}>
+          <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5, marginBottom: 4 }}>BOOK</div>
+          <div style={{ fontSize: 18, color: "#fbbf24", fontWeight: 900, fontFamily: "monospace", lineHeight: 1 }}>
+            {leg.odds >= 0 ? `+${leg.odds}` : leg.odds}
+          </div>
+        </div>
+        <div style={{ background: "#0a0a0a", borderRadius: 6, padding: "10px 12px", border: `1px solid ${tierColor}30` }}>
+          <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5, marginBottom: 4 }}>OUR FAIR</div>
+          <div style={{ fontSize: 18, color: tierColor, fontWeight: 900, fontFamily: "monospace", lineHeight: 1 }}>
+            {fairOdds != null ? (fairOdds >= 0 ? `+${fairOdds}` : fairOdds) : "—"}
+          </div>
+        </div>
+        <div style={{ background: "#0a0a0a", borderRadius: 6, padding: "10px 12px", border: `1px solid ${tierColor}40` }}>
+          <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5, marginBottom: 4 }}>EV %</div>
+          <div style={{ fontSize: 18, color: tierColor, fontWeight: 900, fontFamily: "monospace", lineHeight: 1 }}>
+            {evPct >= 0 ? `+${evPct}` : evPct}%
+          </div>
+        </div>
+      </div>
+
+      {/* Plain-English explainer */}
+      <div style={{
+        fontSize: 11, color: "#bbb", lineHeight: 1.6,
+        padding: "12px 14px", background: "#0a0a0a", border: "1px solid #1a1a1a",
+        borderRadius: 6, marginBottom: 14,
+      }}>
+        Book has it at <strong style={{ color: "#fbbf24" }}>{leg.odds >= 0 ? `+${leg.odds}` : leg.odds}</strong> ({(((leg.odds >= 0 ? 100 / (leg.odds + 100) : Math.abs(leg.odds) / (Math.abs(leg.odds) + 100))) * 100).toFixed(1)}% implied).
+        Our model gives this <strong style={{ color: tierColor }}>{ourProb}%</strong> to hit.
+        That's a <strong style={{ color: tierColor }}>{evPct >= 0 ? `+${evPct}` : evPct}% expected return</strong> per dollar — the sharpest gap on the slate.
+        {leg.reasoning && <span style={{ display: "block", marginTop: 8, color: "#888", fontStyle: "italic", fontSize: 10 }}>{leg.reasoning}</span>}
+      </div>
+
+      <button onClick={() => addLeg({ ...leg, source: "Today's Sharpest" })} style={{
+        width: "100%", padding: "12px",
+        background: inSlip ? "#1a1a1a" : tierColor,
+        color: inSlip ? tierColor : "#000",
+        border: `2px solid ${tierColor}`,
+        borderRadius: 8, fontSize: 12, fontWeight: 900,
+        fontFamily: "monospace", letterSpacing: 2, cursor: "pointer",
+        boxShadow: inSlip ? "none" : `0 4px 16px ${tierColor}50`,
+        transition: "all 0.15s",
+      }}>
+        {inSlip ? "✓ ON YOUR SLIP" : "+ ADD TO SLIP"}
+      </button>
+    </div>
+  );
+}
+
+// ── Track Record strip — top of AI tab ───────────────────────────────────────
+function TrackRecordStrip() {
+  const { placed } = usePlaced();
+  const settled = placed.filter(b => b.status === "WON" || b.status === "LOST");
+  const wins = settled.filter(b => b.status === "WON").length;
+  const losses = settled.filter(b => b.status === "LOST").length;
+  const pending = placed.filter(b => b.status === "PENDING").length;
+
+  // Compute units (assuming wager is in $ and units are wager/100)
+  let units = 0;
+  for (const b of settled) {
+    const dec = parlayOdds(b.legs);
+    const u = b.wager / 100;
+    if (b.status === "WON") units += u * (dec - 1);
+    else if (b.status === "LOST") units -= u;
+  }
+  const winPct = settled.length > 0 ? Math.round((wins / settled.length) * 100) : null;
+  const unitsColor = units > 0 ? "#00ff87" : units < 0 ? "#ff3b3b" : "#666";
+
+  if (placed.length === 0) {
+    return (
+      <div style={{
+        background: "#0a0a0a", border: "1px dashed #1a1a1a",
+        borderRadius: 8, padding: "10px 14px", marginBottom: 14,
+        fontSize: 9, color: "#444", textAlign: "center", letterSpacing: 1.5,
+      }}>
+        📊 NO PLACED BETS YET — TAP <strong style={{ color: "#666" }}>+ ADD</strong> ON ANY PICK,
+        OPEN THE 🎟️ SLIP, AND HIT <strong style={{ color: "#666" }}>PLACE BET</strong> TO START TRACKING
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      background: "linear-gradient(90deg, #0a0a0a, #050505)",
+      border: `1px solid ${unitsColor}30`,
+      borderRadius: 8, padding: "12px 16px", marginBottom: 16,
+      display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
+    }}>
+      <div style={{ display: "flex", gap: 18, alignItems: "baseline", flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5 }}>RECORD</div>
+          <div style={{ fontSize: 16, color: "#fff", fontWeight: 900, fontFamily: "monospace" }}>
+            {wins}-{losses}{winPct != null && <span style={{ fontSize: 10, color: "#666", marginLeft: 6 }}>{winPct}%</span>}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5 }}>UNITS</div>
+          <div style={{ fontSize: 16, color: unitsColor, fontWeight: 900, fontFamily: "monospace" }}>
+            {units >= 0 ? "+" : ""}{units.toFixed(2)}u
+          </div>
+        </div>
+        {pending > 0 && (
+          <div>
+            <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5 }}>PENDING</div>
+            <div style={{ fontSize: 16, color: "#fbbf24", fontWeight: 900, fontFamily: "monospace" }}>
+              {pending}
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 9, color: "#444", textAlign: "right", lineHeight: 1.4 }}>
+        TAP THE 🎟️ SLIP<br />
+        TO MARK W/L
+      </div>
+    </div>
+  );
+}
+
+// ── Why-this-pick expander — small "+" button reveals reasons ────────────────
+function WhyExpander({ reasons, color = "#00ff87" }) {
+  const [open, setOpen] = useState(false);
+  if (!reasons || reasons.length === 0) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        background: "transparent", border: "none", padding: 0,
+        color: color, fontSize: 9, fontFamily: "monospace",
+        letterSpacing: 1.5, cursor: "pointer", fontWeight: 700,
+        opacity: 0.7,
+      }}>
+        {open ? "▼ HIDE WHY" : "▶ WHY THIS PICK"}
+      </button>
+      {open && (
+        <div style={{
+          marginTop: 6, padding: "8px 10px",
+          background: `${color}06`, border: `1px solid ${color}25`,
+          borderRadius: 4,
+        }}>
+          {reasons.map((r, j) => (
+            <div key={j} style={{ fontSize: 10, color: "#aaa", marginBottom: 3, lineHeight: 1.5 }}>
+              • {r}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Collapsible section wrapper — used to hide secondary parlay models
+function CollapsibleSection({ title, subtitle, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{
+      background: "#080808", border: "1px solid #1a1a1a",
+      borderRadius: 8, marginBottom: 24, overflow: "hidden",
+    }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        width: "100%", background: "transparent", border: "none",
+        padding: "14px 18px", cursor: "pointer", textAlign: "left",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <div>
+          <div style={{ fontSize: 11, color: "#888", letterSpacing: 2.5, fontWeight: 800 }}>
+            {title}
+          </div>
+          {subtitle && <div style={{ fontSize: 9, color: "#444", marginTop: 3 }}>{subtitle}</div>}
+        </div>
+        <span style={{ fontSize: 12, color: "#666", fontFamily: "monospace" }}>
+          {open ? "▼ HIDE" : "▶ SHOW"}
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: "0 14px 14px", borderTop: "1px solid #1a1a1a" }}>
+          <div style={{ paddingTop: 14 }}>{children}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AIBoard({ aiPicks, allGames }) {
   const hasPreview = aiPicks && aiPicks.total_preview_games > 0;
   if (!hasPreview) {
@@ -1891,18 +2179,21 @@ function AIBoard({ aiPicks, allGames }) {
 
   return (
     <div>
-      {/* Header */}
+      {/* TRACK RECORD — your placed bets, W/L, units */}
+      <TrackRecordStrip />
+
+      {/* HERO PICK — biggest single mispricing of the day */}
+      <HeroPickCard aiPicks={aiPicks} />
+
+      {/* Header (slimmer now that the hero card carries the weight) */}
       <div style={{
-        background: "linear-gradient(135deg, #00ff8710 0%, #a78bfa10 100%)",
-        border: "1px solid #00ff8730", borderRadius: 8,
-        padding: "16px 20px", marginBottom: 20,
+        background: "linear-gradient(135deg, #00ff8708 0%, #a78bfa08 100%)",
+        border: "1px solid #1a1a1a", borderRadius: 6,
+        padding: "10px 14px", marginBottom: 16,
+        display: "flex", justifyContent: "space-between", alignItems: "center",
       }}>
-        <div style={{ fontSize: 11, color: "#00ff87", letterSpacing: 3, fontWeight: 900 }}>
-          🧠 AI INTELLIGENCE
-        </div>
-        <div style={{ fontSize: 10, color: "#666", marginTop: 6, lineHeight: 1.5 }}>
-          Synthesized from {aiPicks.total_preview_games} upcoming games. Safe play, structured parlay,
-          full-board ranking, value-watch list, and lines flagged as bad data.
+        <div style={{ fontSize: 10, color: "#666", letterSpacing: 2, fontWeight: 700 }}>
+          🧠 AI INTELLIGENCE — {aiPicks.total_preview_games} UPCOMING GAMES
         </div>
       </div>
 
@@ -1973,29 +2264,19 @@ function AIBoard({ aiPicks, allGames }) {
         </div>
       )}
 
-      {/* VALUE PARLAY (unders + dogs) */}
       {/* BEST EDGE PARLAY — pure signal, highest EV legs regardless of type */}
       <BestEdgeCard parlay={best_edge_parlay} />
 
-      <ParlayCard parlay={parlay} title="VALUE PARLAY — UNDERS + DOGS" accentColor="#fbbf24" icon="🎫" />
-
-      {/* POWER PARLAY (overs + faves) */}
-      <ParlayCard parlay={power_parlay} title="BEST PARLAY OF THE DAY" accentColor="#fb7185" icon="🏆" />
-
-      {/* NRFI PARLAY (No Run First Inning) */}
-      {/* ALREADY WINNING PARLAY */}
-      <AlreadyWinningCard parlay={already_winning_parlay} />
-
-      <ParlayCard parlay={nrfi_parlay} title="NRFI PARLAY — STACKED 1ST INNING UNDERS" accentColor="#facc15" icon="🥚" />
-
-      {/* F5 UNDER PARLAY (First 5 innings) */}
-      <ParlayCard parlay={f5_under_parlay} title="F5 UNDER PARLAY — NO BULLPEN RISK" accentColor="#60a5fa" icon="5️⃣" />
-
-      {/* OUT THE PARK PARLAY (extreme reverse tease — 1.5 runs against you) */}
-      <OutTheParkCard parlay={out_the_park_parlay} />
-
-      {/* WAY OUT THE PARK (faves -2.5, dogs -1.5, unders -2 — wildest swing) */}
-      <WayOutTheParkCard parlay={way_out_the_park_parlay} />
+      {/* MORE PARLAYS — collapsed by default to cut noise */}
+      <CollapsibleSection title="🎟️ MORE PARLAY MODELS" subtitle="F5 · NRFI · OTP · WOTP · Value · Power · Already Winning">
+        <ParlayCard parlay={f5_under_parlay} title="F5 UNDER PARLAY — NO BULLPEN RISK" accentColor="#60a5fa" icon="5️⃣" />
+        <ParlayCard parlay={nrfi_parlay} title="NRFI PARLAY — STACKED 1ST INNING UNDERS" accentColor="#facc15" icon="🥚" />
+        <OutTheParkCard parlay={out_the_park_parlay} />
+        <WayOutTheParkCard parlay={way_out_the_park_parlay} />
+        <AlreadyWinningCard parlay={already_winning_parlay} />
+        <ParlayCard parlay={parlay} title="VALUE PARLAY — UNDERS + DOGS" accentColor="#fbbf24" icon="🎫" />
+        <ParlayCard parlay={power_parlay} title="POWER PARLAY — OVERS + FAVES" accentColor="#fb7185" icon="🏆" />
+      </CollapsibleSection>
 
       {/* WAY UNDER candidates */}
       {way_under_candidates.length > 0 && (
@@ -2070,11 +2351,7 @@ function AIBoard({ aiPicks, allGames }) {
                 accentColor={color}
               />
             </div>
-            <div style={{ marginTop: 6 }}>
-              {u.reasons.map((r, j) => (
-                <div key={j} style={{ fontSize: 9, color: "#666", marginBottom: 2 }}>• {r}</div>
-              ))}
-            </div>
+            <WhyExpander reasons={u.reasons} color={color} />
           </div>
         );
       })}
@@ -2114,11 +2391,7 @@ function AIBoard({ aiPicks, allGames }) {
                 accentColor={color}
               />
             </div>
-            <div style={{ marginTop: 6 }}>
-              {d.reasons.map((r, j) => (
-                <div key={j} style={{ fontSize: 9, color: "#666", marginBottom: 2 }}>• {r}</div>
-              ))}
-            </div>
+            <WhyExpander reasons={d.reasons} color={color} />
           </div>
         );
       })}
@@ -2158,11 +2431,7 @@ function AIBoard({ aiPicks, allGames }) {
                 />
               )}
             </div>
-            <div style={{ marginTop: 6 }}>
-              {o.reasons.map((r, j) => (
-                <div key={j} style={{ fontSize: 9, color: "#666", marginBottom: 2 }}>• {r}</div>
-              ))}
-            </div>
+            <WhyExpander reasons={o.reasons} color={color} />
           </div>
         );
       })}
@@ -2205,11 +2474,7 @@ function AIBoard({ aiPicks, allGames }) {
                 accentColor={color}
               />
             </div>
-            <div style={{ marginTop: 6 }}>
-              {f.reasons.map((r, j) => (
-                <div key={j} style={{ fontSize: 9, color: "#666", marginBottom: 2 }}>• {r}</div>
-              ))}
-            </div>
+            <WhyExpander reasons={f.reasons} color={color} />
           </div>
         );
       })}
@@ -2338,6 +2603,8 @@ function BetSlipFAB() {
 
 function BetSlipDrawer() {
   const { slip, wager, setWager, drawerOpen, setDrawerOpen, removeLeg, clearSlip } = useBetSlip();
+  const { placed, placeBet, updateStatus, removePlaced, clearAllPlaced } = usePlaced();
+  const [tab, setTab] = useState("potential");  // "potential" | "placed"
 
   // Math
   const oddsToDecimal = (am) => am >= 0 ? 1 + am / 100 : 1 + 100 / Math.abs(am);
@@ -2357,6 +2624,13 @@ function BetSlipDrawer() {
 
   const isParlay = validLegs.length >= 2;
   const isSingle = validLegs.length === 1;
+
+  const handlePlaceBet = () => {
+    if (!validLegs.length || wagerAmt <= 0) return;
+    placeBet(validLegs, wager);
+    clearSlip();
+    setTab("placed");
+  };
 
   if (!drawerOpen) return null;
 
@@ -2399,8 +2673,125 @@ function BetSlipDrawer() {
           }}>✕</button>
         </div>
 
-        {/* Empty state */}
-        {validLegs.length === 0 && (
+        {/* Tab switch */}
+        <div style={{ display: "flex", borderBottom: "1px solid #1a1a1a" }}>
+          {[
+            { key: "potential", label: `POTENTIAL · ${validLegs.length}` },
+            { key: "placed",    label: `PLACED · ${placed.length}` },
+          ].map(({ key, label }) => (
+            <button key={key} onClick={() => setTab(key)} style={{
+              flex: 1, background: "transparent", border: "none",
+              borderBottom: tab === key ? "2px solid #00ff87" : "2px solid transparent",
+              color: tab === key ? "#fff" : "#444",
+              padding: "10px", fontSize: 10, fontFamily: "monospace",
+              letterSpacing: 1.5, fontWeight: 700, cursor: "pointer",
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {/* PLACED tab content */}
+        {tab === "placed" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
+            {placed.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#333", padding: "40px 20px" }}>
+                <div style={{ fontSize: 32, marginBottom: 10, opacity: 0.4 }}>📋</div>
+                <div style={{ fontSize: 10, color: "#555", lineHeight: 1.5 }}>
+                  No placed bets yet.<br/>Build a slip in <strong>POTENTIAL</strong> and tap <strong style={{ color: "#00ff87" }}>PLACE BET</strong>.
+                </div>
+              </div>
+            ) : (
+              <>
+                {placed.map(b => {
+                  const dec = parlayOdds(b.legs);
+                  const pay = b.wager * dec;
+                  const statusColor = b.status === "WON" ? "#00ff87" : b.status === "LOST" ? "#ff3b3b" : b.status === "PUSH" ? "#888" : "#fbbf24";
+                  const placedDate = new Date(b.placedAt).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+                  const placedTime = new Date(b.placedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" });
+                  return (
+                    <div key={b.id} style={{
+                      background: "#0a0a0a", border: `1px solid ${statusColor}40`,
+                      borderRadius: 8, padding: "10px 12px", marginBottom: 8,
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                        <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5 }}>
+                          {placedDate} {placedTime} PT · {b.legs.length}-LEG
+                        </div>
+                        <span style={{
+                          fontSize: 9, fontWeight: 900, letterSpacing: 1.5,
+                          color: statusColor, background: statusColor + "18",
+                          border: `1px solid ${statusColor}50`,
+                          padding: "1px 6px", borderRadius: 3,
+                        }}>{b.status}</span>
+                      </div>
+                      {b.legs.map((leg, i) => (
+                        <div key={i} style={{ fontSize: 10, color: "#bbb", marginBottom: 2 }}>
+                          <span style={{ color: "#666" }}>#{i+1} </span>
+                          {leg.play}
+                          <span style={{ color: "#fbbf24", marginLeft: 6, fontFamily: "monospace" }}>
+                            {leg.odds >= 0 ? `+${leg.odds}` : leg.odds}
+                          </span>
+                          <div style={{ fontSize: 8, color: "#444", marginLeft: 16 }}>{leg.matchup}</div>
+                        </div>
+                      ))}
+                      <div style={{
+                        marginTop: 6, paddingTop: 6, borderTop: "1px solid #1a1a1a",
+                        display: "flex", justifyContent: "space-between", alignItems: "center",
+                      }}>
+                        <div style={{ fontSize: 9, color: "#888", fontFamily: "monospace" }}>
+                          ${b.wager} → <span style={{ color: "#00ff87" }}>${pay.toFixed(2)}</span>
+                        </div>
+                        {b.status === "PENDING" ? (
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button onClick={() => updateStatus(b.id, "WON")} style={{
+                              background: "#00ff8718", color: "#00ff87",
+                              border: "1px solid #00ff8750", borderRadius: 4,
+                              fontSize: 9, fontWeight: 800, padding: "3px 10px",
+                              cursor: "pointer", fontFamily: "monospace", letterSpacing: 1,
+                            }}>✓ W</button>
+                            <button onClick={() => updateStatus(b.id, "LOST")} style={{
+                              background: "#ff3b3b18", color: "#ff3b3b",
+                              border: "1px solid #ff3b3b50", borderRadius: 4,
+                              fontSize: 9, fontWeight: 800, padding: "3px 10px",
+                              cursor: "pointer", fontFamily: "monospace", letterSpacing: 1,
+                            }}>✕ L</button>
+                            <button onClick={() => updateStatus(b.id, "PUSH")} style={{
+                              background: "#88888818", color: "#888",
+                              border: "1px solid #88888850", borderRadius: 4,
+                              fontSize: 9, fontWeight: 800, padding: "3px 10px",
+                              cursor: "pointer", fontFamily: "monospace", letterSpacing: 1,
+                            }}>= P</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => updateStatus(b.id, "PENDING")} style={{
+                            background: "transparent", color: "#444",
+                            border: "1px solid #1a1a1a", borderRadius: 4,
+                            fontSize: 8, padding: "2px 8px", cursor: "pointer",
+                            fontFamily: "monospace", letterSpacing: 1,
+                          }}>UNDO</button>
+                        )}
+                        <button onClick={() => removePlaced(b.id)} style={{
+                          background: "transparent", border: "none",
+                          color: "#333", fontSize: 14, cursor: "pointer", padding: "0 2px",
+                        }}>×</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {placed.length > 0 && (
+                  <button onClick={() => { if (confirm("Clear all placed bets and reset track record?")) clearAllPlaced(); }} style={{
+                    width: "100%", marginTop: 8, background: "transparent",
+                    border: "1px solid #1a1a1a", color: "#444",
+                    fontSize: 9, fontFamily: "monospace", letterSpacing: 1.5,
+                    padding: "8px", borderRadius: 6, cursor: "pointer",
+                  }}>RESET TRACK RECORD</button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* POTENTIAL tab content — empty state */}
+        {tab === "potential" && validLegs.length === 0 && (
           <div style={{ flex: 1, display: "flex", flexDirection: "column",
             alignItems: "center", justifyContent: "center", color: "#333",
             padding: "40px 20px", textAlign: "center" }}>
@@ -2409,13 +2800,14 @@ function BetSlipDrawer() {
               SLIP IS EMPTY
             </div>
             <div style={{ fontSize: 10, color: "#444", lineHeight: 1.5, maxWidth: 240 }}>
-              Tap <span style={{ color: "#00ff87" }}>+ ADD</span> on any pick — Best Edge, OTP, F5, NRFI, individual unders, dogs, faves — to start building your parlay.
+              Tap <span style={{ color: "#00ff87" }}>+ ADD</span> on any pick to start building.
+              Then tap <strong style={{ color: "#fff" }}>PLACE BET</strong> to lock it in for tracking.
             </div>
           </div>
         )}
 
-        {/* Legs */}
-        {validLegs.length > 0 && (
+        {/* POTENTIAL tab content — legs list */}
+        {tab === "potential" && validLegs.length > 0 && (
           <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
             {validLegs.map((leg, i) => {
               const prob = oddsToProb(leg.odds) * 100;
@@ -2470,8 +2862,8 @@ function BetSlipDrawer() {
           </div>
         )}
 
-        {/* Wager + Payout */}
-        {validLegs.length > 0 && (
+        {/* Wager + Payout (only on POTENTIAL tab) */}
+        {tab === "potential" && validLegs.length > 0 && (
           <div style={{ borderTop: "2px solid #1a1a1a", padding: "16px 18px",
             background: "linear-gradient(180deg, transparent, #00ff8708)" }}>
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
@@ -2527,6 +2919,23 @@ function BetSlipDrawer() {
                   +${profit.toLocaleString(undefined, { maximumFractionDigits: 2 })} profit
                 </div>
               </div>
+            </div>
+
+            {/* PLACE BET — locks the slip into the tracking log */}
+            <button onClick={handlePlaceBet} disabled={wagerAmt <= 0} style={{
+              width: "100%", marginTop: 12,
+              background: wagerAmt > 0 ? "linear-gradient(135deg, #00ff87, #34d399)" : "#1a1a1a",
+              color: wagerAmt > 0 ? "#000" : "#444",
+              border: "none", borderRadius: 8,
+              padding: "14px", fontSize: 12, fontWeight: 900,
+              fontFamily: "monospace", letterSpacing: 2,
+              cursor: wagerAmt > 0 ? "pointer" : "not-allowed",
+              boxShadow: wagerAmt > 0 ? "0 4px 16px #00ff8740" : "none",
+            }}>
+              {wagerAmt > 0 ? `📥 PLACE BET — $${wagerAmt} TO WIN $${profit.toFixed(2)}` : "ENTER WAGER TO PLACE"}
+            </button>
+            <div style={{ fontSize: 8, color: "#333", textAlign: "center", marginTop: 6, lineHeight: 1.4 }}>
+              "Placing" saves locally to your track record · mark W/L manually as games settle
             </div>
           </div>
         )}
