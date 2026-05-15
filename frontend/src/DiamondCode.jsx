@@ -2556,11 +2556,13 @@ function DiamondCode() {
 
   const [aiPicks, setAiPicks] = useState(null);
 
-  const targetDate = (() => {
-    const d = new Date();
-    d.setDate(d.getDate() + dateOffset);
-    return d.toISOString().slice(0, 10);
-  })();
+  // All "today" / "tomorrow" rolls based on Pacific Time — MLB schedule's home zone
+  const pacificDateString = (offsetDays = 0) => {
+    const ms = Date.now() + offsetDays * 86400000;
+    return new Date(ms).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  };
+
+  const targetDate = pacificDateString(dateOffset);
 
   const fetchSlate = async () => {
     setLoading(true);
@@ -2602,11 +2604,11 @@ function DiamondCode() {
     return () => clearInterval(id);
   }, [allGames]);
 
-  // New-day detection: refetch when tab regains focus or once a minute if date has rolled over
+  // New-day detection: refetch when tab regains focus or once a minute if Pacific date has rolled over
   useEffect(() => {
-    let lastDate = new Date().toISOString().slice(0, 10);
+    let lastDate = pacificDateString(0);
     const checkNewDay = () => {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = pacificDateString(0);
       if (today !== lastDate) { lastDate = today; setDateOffset(0); }
     };
     const onVisibility = () => { if (document.visibilityState === "visible") checkNewDay(); };
