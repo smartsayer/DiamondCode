@@ -2312,6 +2312,200 @@ function WhyExpander({ reasons, color = "#00ff87" }) {
   );
 }
 
+// ── THE FORMULA — self-contained correlated parlay (the flagship) ───────────
+function FormulaParlayCard({ parlay }) {
+  const { addLeg, isInSlip } = useBetSlip();
+  if (!parlay) return null;
+  const games = parlay.games || [];
+  const hasGames = games.length > 0;
+  const GOLD = "#f5d020";
+
+  const addGame = (g) => g.legs.forEach(l => addLeg({ ...l, source: "The Formula" }));
+
+  return (
+    <div style={{
+      background: hasGames
+        ? `linear-gradient(135deg, #0a0a05, ${GOLD}0d 50%, #0a0a05)`
+        : "#0a0a0a",
+      border: `2px solid ${hasGames ? GOLD : "#2a2510"}`,
+      borderRadius: 12, padding: "20px 22px", marginBottom: 24,
+      boxShadow: hasGames ? `0 0 44px ${GOLD}25` : "none",
+      position: "relative", overflow: "hidden",
+    }}>
+      <div style={{
+        position: "absolute", top: 0, right: 0,
+        background: hasGames ? GOLD : "#2a2510", color: "#000",
+        fontSize: 8, fontWeight: 900, letterSpacing: 2,
+        padding: "4px 12px", borderBottomLeftRadius: 8,
+      }}>
+        ⭐ THE ONE
+      </div>
+
+      <div style={{ fontSize: 13, color: hasGames ? GOLD : "#555", letterSpacing: 3, fontWeight: 900 }}>
+        🎯 THE FORMULA
+      </div>
+      <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.5 }}>
+        Self-contained correlated parlay — each game stacks <strong style={{ color: "#aaa" }}>UNDER + Favorite ML + F5 UNDER</strong>.
+        One thesis, three expressions: <em>a low-scoring game the better team controls early.</em>
+      </div>
+
+      {!hasGames && (
+        <div style={{
+          marginTop: 16, padding: "20px 16px", textAlign: "center",
+          background: "#080808", border: "1px dashed #2a2510", borderRadius: 8,
+          fontSize: 10, color: "#666", lineHeight: 1.6,
+        }}>
+          {parlay.note || "No games clear all three filters today."}
+          <div style={{ fontSize: 9, color: "#444", marginTop: 8 }}>
+            The Formula only fires when the script lines up. Discipline &gt; forcing a play.
+          </div>
+        </div>
+      )}
+
+      {hasGames && (
+        <>
+          {/* Honest probability story */}
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8,
+            margin: "16px 0",
+          }}>
+            {[
+              { label: "BOOK IMPLIED", val: parlay.book_implied_pct, color: "#fb7185", sub: "what they price" },
+              { label: "INDEPENDENT", val: parlay.joint_naive_pct, color: "#fbbf24", sub: "model, no corr" },
+              { label: "CORRELATED", val: parlay.joint_corr_pct, color: GOLD, sub: "the real read" },
+            ].map(({ label, val, color, sub }) => (
+              <div key={label} style={{
+                background: "#080808", border: `1px solid ${color}30`,
+                borderRadius: 6, padding: "10px 8px", textAlign: "center",
+              }}>
+                <div style={{ fontSize: 7, color: "#444", letterSpacing: 1.5, marginBottom: 4 }}>{label}</div>
+                <div style={{ fontSize: 17, color, fontWeight: 900, fontFamily: "monospace", lineHeight: 1 }}>
+                  {val != null ? `${val}%` : "—"}
+                </div>
+                <div style={{ fontSize: 7, color: "#444", marginTop: 3 }}>{sub}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{
+            fontSize: 9, color: "#aaa", lineHeight: 1.5, marginBottom: 16,
+            padding: "8px 12px", background: `${GOLD}0a`, border: `1px solid ${GOLD}25`, borderRadius: 5,
+          }}>
+            The book prices these 3 legs <strong>independent</strong>. They're not — they win and lose together.
+            The gap between <strong style={{ color: "#fb7185" }}>{parlay.book_implied_pct}%</strong> (book) and
+            <strong style={{ color: GOLD }}> {parlay.joint_corr_pct}%</strong> (correlation-adjusted) is the entire thesis.
+          </div>
+
+          {/* Per-game correlated clusters */}
+          {games.map((g, gi) => (
+            <div key={gi} style={{
+              border: `1px solid ${GOLD}30`, borderRadius: 8,
+              padding: "12px 14px", marginBottom: 10,
+              background: "#080808",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                <div style={{ fontSize: 12, color: "#fff", fontWeight: 800 }}>
+                  <span style={{ color: GOLD }}>#{gi + 1}</span> {g.matchup}
+                </div>
+                <div style={{ fontSize: 8, color: "#666", fontFamily: "monospace" }}>
+                  U:{g.under_score} · F5:{g.f5_score} · Fav:{g.fav_score}
+                </div>
+              </div>
+
+              {/* The 3 correlated legs, bracketed */}
+              <div style={{ borderLeft: `2px solid ${GOLD}50`, paddingLeft: 10 }}>
+                {g.legs.map((leg, li) => {
+                  const e = leg.edge || {};
+                  const inSlip = isInSlip({ matchup: leg.matchup, play: leg.play, type: leg.type });
+                  return (
+                    <div key={li} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "6px 0",
+                      borderBottom: li < 2 ? "1px solid #141414" : "none",
+                    }}>
+                      <span style={{ fontSize: 7, color: GOLD, fontWeight: 700, letterSpacing: 1, minWidth: 64 }}>
+                        {leg.leg_role}
+                      </span>
+                      <span style={{ fontSize: 12, color: "#fff", fontWeight: 700, flex: 1, minWidth: 0 }}>
+                        {leg.play}
+                      </span>
+                      <span style={{ fontSize: 11, color: "#fbbf24", fontFamily: "monospace", fontWeight: 700 }}>
+                        {leg.odds >= 0 ? `+${leg.odds}` : leg.odds}
+                      </span>
+                      {e.tier && e.tier !== "UNPRICED" && (
+                        <span style={{
+                          fontSize: 8, color: e.color, background: e.color + "18",
+                          border: `1px solid ${e.color}50`, padding: "1px 5px",
+                          borderRadius: 3, fontWeight: 800, fontFamily: "monospace",
+                        }}>
+                          {e.icon} {e.edge_pct >= 0 ? "+" : ""}{e.edge_pct}%
+                        </span>
+                      )}
+                      <button onClick={() => addLeg({ ...leg, source: "The Formula" })} style={{
+                        background: inSlip ? GOLD : `${GOLD}18`,
+                        border: `1px solid ${inSlip ? GOLD : GOLD + "60"}`,
+                        color: inSlip ? "#000" : GOLD,
+                        fontSize: 8, fontWeight: 800, fontFamily: "monospace",
+                        padding: "2px 7px", borderRadius: 10, cursor: "pointer",
+                      }}>
+                        {inSlip ? "✓" : "+"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                <div style={{ fontSize: 9, color: "#888", fontFamily: "monospace" }}>
+                  indep <span style={{ color: "#fbbf24" }}>{g.naive_triple_pct}%</span>
+                  <span style={{ color: "#444" }}> → </span>
+                  correlated <span style={{ color: GOLD, fontWeight: 700 }}>{g.corr_triple_pct}%</span>
+                </div>
+                <button onClick={() => addGame(g)} style={{
+                  background: "transparent", border: `1px solid ${GOLD}50`,
+                  color: GOLD, fontSize: 8, fontWeight: 800, fontFamily: "monospace",
+                  letterSpacing: 1, padding: "4px 10px", borderRadius: 4, cursor: "pointer",
+                }}>
+                  + ADD ALL 3
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {/* Combined */}
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            marginTop: 14, padding: "12px 14px",
+            background: `${GOLD}0d`, border: `1px solid ${GOLD}40`, borderRadius: 8,
+          }}>
+            <div>
+              <div style={{ fontSize: 8, color: "#666", letterSpacing: 1.5 }}>FULL TICKET</div>
+              <div style={{ fontSize: 22, color: GOLD, fontWeight: 900, fontFamily: "monospace" }}>
+                {parlay.combined_odds}
+              </div>
+              <div style={{ fontSize: 8, color: "#666", fontFamily: "monospace" }}>
+                ${parlay.payout_per_100?.toLocaleString()}/$100
+              </div>
+            </div>
+            <button onClick={() => games.forEach(addGame)} style={{
+              background: GOLD, color: "#000", border: "none",
+              borderRadius: 8, padding: "12px 20px",
+              fontSize: 11, fontWeight: 900, fontFamily: "monospace",
+              letterSpacing: 1.5, cursor: "pointer",
+              boxShadow: `0 4px 16px ${GOLD}50`,
+            }}>
+              + ADD FULL FORMULA
+            </button>
+          </div>
+
+          <div style={{ fontSize: 8, color: "#555", marginTop: 10, lineHeight: 1.5, fontStyle: "italic" }}>
+            {parlay.note}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Sharp Money Parlay — every leg is here because the LINE moved ───────────
 function SharpParlayCard({ parlay }) {
   if (!parlay) return null;
@@ -3012,12 +3206,15 @@ function AIBoard({ aiPicks, allGames }) {
     out_the_park_parlay = {}, way_out_the_park_parlay = {},
     already_winning_parlay = {},
     nrfi_parlay = {}, f5_under_parlay = {},
-    best_edge_parlay = {}, sharp_parlay = {},
+    best_edge_parlay = {}, sharp_parlay = {}, formula_parlay = {},
     rankings = [], watch_list = [], skip_list = [], flagged_lines = [],
   } = aiPicks;
 
   return (
     <div>
+      {/* THE FORMULA — flagship self-contained correlated parlay */}
+      <FormulaParlayCard parlay={formula_parlay} />
+
       {/* HERO PICK — biggest single mispricing of the day */}
       <HeroPickCard aiPicks={aiPicks} />
 

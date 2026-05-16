@@ -42,6 +42,7 @@ class AIPicksEngine:
         f5_under_parlay = self._build_f5_under_parlay(clean)
         best_edge_parlay = self._build_best_edge_parlay(top_unders, top_dogs, broad_faves)
         sharp_parlay = self._build_sharp_parlay(clean)
+        formula_parlay = self._build_formula_parlay(clean, top_unders, broad_faves)
         rankings = self._rank_full_board(preview, flagged_pks)
         watch_list = self._build_watch_list(clean)
         skip_list = self._build_skip_list(clean)
@@ -89,6 +90,7 @@ class AIPicksEngine:
             "f5_under_parlay": f5_under_parlay,
             "best_edge_parlay": best_edge_parlay,
             "sharp_parlay": sharp_parlay,
+            "formula_parlay": formula_parlay,
             "rankings": rankings,
             "watch_list": watch_list,
             "skip_list": skip_list,
@@ -1990,6 +1992,187 @@ class AIPicksEngine:
         except (ValueError, AttributeError, TypeError):
             pass
 
+    def _build_formula_parlay(
+        self,
+        games: list[dict[str, Any]],
+        top_unders: list[dict[str, Any]],
+        broad_faves: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        THE FORMULA — self-contained correlated parlay.
+
+        Each qualifying game contributes a correlated TRIO:
+          • Full-game UNDER
+          • Favorite MONEYLINE
+          • F5 UNDER
+
+        These aren't 3 independent bets — they're one thesis ("low-scoring
+        game the better team controls early") expressed three ways. The book
+        prices them independently; they're positively correlated. That gap
+        is the edge. Up to 4 games. We surface BOTH the book-priced (naive,
+        independent) EV and a correlation-adjusted estimate.
+        """
+        under_by_pk = {u.get("game_pk"): u for u in top_unders}
+        fave_by_pk = {f.get("game_pk"): f for f in broad_faves}
+
+        clusters = []
+        for g in games:
+            pk = g.get("game_pk")
+            f5 = g.get("f5") or {}
+            f5_score = f5.get("f5_score", 0)
+            f5_line = f5.get("projected_f5_line")
+            u = under_by_pk.get(pk)
+            f = fave_by_pk.get(pk)
+
+            # All three signals must be present and meaningful
+            if not u or not f:
+                continue
+            under_score = u.get("under_score", 0)
+            total = u.get("closing_total")
+            fav_ml = f.get("moneyline")
+            fav_team = f.get("fav_team")
+            fav_score = f.get("fav_score", 0)
+            if total is None or fav_ml is None or fav_team is None:
+                continue
+            if under_score < 55 or f5_score < 55 or fav_score < 50:
+                continue
+
+            # Correlation strength — under + F5 weighted heavier (core thesis)
+            corr_strength = under_score * 0.40 + f5_score * 0.35 + fav_score * 0.25
+
+            # ── Price each leg honestly (standalone EV) ───────────────────
+            under_odds = u.get("best_price") or -110
+            under_prob = pricing.under_prob_from_score(under_score)
+            under_edge = pricing.price_leg(under_prob, under_odds)
+
+            fav_base = pricing.american_to_prob(fav_ml)
+            fav_prob = max(0.45, min(0.85, fav_base + (fav_score - 50) * 0.0010))
+            fav_edge = pricing.price_leg(fav_prob, fav_ml)
+
+            f5_odds = -120  # F5 unders carry standard juice
+            f5_prob = pricing.under_prob_from_score(f5_score)
+            f5_edge = pricing.price_leg(f5_prob, f5_odds)
+
+            matchup = f"{g.get('away_team')} @ {g.get('home_team')}"
+            legs = [
+                {
+                    "matchup": matchup, "play": f"UNDER {total}",
+                    "type": "FORMULA_UNDER", "odds": under_odds,
+                    "edge": under_edge, "our_prob": under_prob,
+                    "leg_role": "GAME UNDER",
+                },
+                {
+                    "matchup": matchup, "play": f"{fav_team} ML",
+                    "type": "FORMULA_FAV_ML", "odds": fav_ml,
+                    "edge": fav_edge, "our_prob": fav_prob,
+                    "leg_role": "FAVORITE ML",
+                },
+                {
+                    "matchup": matchup,
+                    "play": f"F5 UNDER {f5_line}" if f5_line else "F5 UNDER",
+                    "type": "FORMULA_F5_UNDER", "odds": f5_odds,
+                    "edge": f5_edge, "our_prob": f5_prob,
+                    "leg_role": "F5 UNDER",
+                },
+            ]
+
+            # Naive (independent) triple probability — what the book prices off
+            naive_triple = under_prob * fav_prob * f5_prob
+            # Correlation-adjusted, HONESTLY bounded. Hard ceiling: P(A∩B∩C)
+            # can never exceed its least-likely leg. Positive correlation
+            # moves the true joint a CONSERVATIVE fraction of the way from
+            # independent toward that ceiling. 0.30 = moderate correlation
+            # (transparent knob). This keeps the estimate believable instead
+            # of fabricating a 100%+ "CRUSH" the way naive p**k would.
+            min_leg = min(under_prob, fav_prob, f5_prob)
+            _CORR_FACTOR = 0.30
+            corr_triple = naive_triple + _CORR_FACTOR * (min_leg - naive_triple)
+
+            clusters.append({
+                "game_pk": pk,
+                "matchup": matchup,
+                "legs": legs,
+                "corr_strength": round(corr_strength, 1),
+                "naive_triple": naive_triple,
+                "corr_triple": corr_triple,
+                "under_score": round(under_score, 1),
+                "f5_score": round(f5_score, 1),
+                "fav_score": round(fav_score, 1),
+                "fav_team": fav_team,
+            })
+
+        if not clusters:
+            return {
+                "legs": [], "games": [], "combined_odds": "—", "payout_per_100": 0,
+                "structure": "",
+                "note": "No games clear all three filters today (UNDER 55+ · Fav 50+ · F5 55+). "
+                        "The Formula only fires when the script lines up — that's the point.",
+            }
+
+        clusters.sort(key=lambda c: c["corr_strength"], reverse=True)
+        top = clusters[:4]
+
+        # Flatten legs, compute combined book odds
+        all_legs = []
+        for i, c in enumerate(top, start=1):
+            for leg in c["legs"]:
+                leg["game_index"] = i
+                all_legs.append(leg)
+
+        combined, payout = self._calc_parlay_odds([l["odds"] for l in all_legs])
+
+        # Joint probabilities across all games
+        joint_naive = 1.0
+        joint_corr = 1.0
+        for c in top:
+            joint_naive *= c["naive_triple"]
+            joint_corr *= c["corr_triple"]
+
+        # Honest framing: we deliberately do NOT headline a parlay-level EV%.
+        # Stacking 6+ legs compounds model error — a parlay EV built from
+        # per-leg edges is exactly the optimistic mirage books profit from.
+        # We surface: (a) per-leg standalone edges, (b) the correlation
+        # probability lift per game, (c) the book's implied price. The
+        # TRACK tab's CLV is the only honest judge of whether this wins.
+        try:
+            combined_int = int(str(combined).replace("+", "").replace("−", "-"))
+            book_implied_pct = round(pricing.american_to_prob(combined_int) * 100, 2)
+        except (ValueError, TypeError):
+            book_implied_pct = None
+
+        structure = " + ".join(
+            f"{c['fav_team'].split()[-1]}" for c in top
+        )
+
+        return {
+            "legs": all_legs,
+            "games": [
+                {
+                    "matchup": c["matchup"],
+                    "fav_team": c["fav_team"],
+                    "corr_strength": c["corr_strength"],
+                    "under_score": c["under_score"],
+                    "f5_score": c["f5_score"],
+                    "fav_score": c["fav_score"],
+                    "legs": c["legs"],
+                    "naive_triple_pct": round(c["naive_triple"] * 100, 1),
+                    "corr_triple_pct": round(c["corr_triple"] * 100, 1),
+                }
+                for c in top
+            ],
+            "combined_odds": combined,
+            "payout_per_100": round(payout * 100, 2),
+            "structure": structure,
+            "book_implied_pct": book_implied_pct,
+            "joint_naive_pct": round(joint_naive * 100, 2),
+            "joint_corr_pct": round(joint_corr * 100, 2),
+            "note": f"{len(top)}-game correlated stack · {len(all_legs)} legs. "
+                    f"Each game's 3 legs rise and fall together — the book "
+                    f"prices them independent. No parlay-EV headline on purpose: "
+                    f"stacking compounds model error. Per-leg edges + correlation "
+                    f"lift below; the TRACK tab is the judge.",
+        }
+
     def _build_sharp_parlay(self, games: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Pure follow-the-money parlay. No model overlay — every leg is here
@@ -2267,6 +2450,7 @@ class AIPicksEngine:
             "f5_under_parlay": empty_parlay,
             "best_edge_parlay": empty_parlay,
             "sharp_parlay": empty_parlay,
+            "formula_parlay": empty_parlay,
             "rankings": [],
             "watch_list": [],
             "skip_list": [],
