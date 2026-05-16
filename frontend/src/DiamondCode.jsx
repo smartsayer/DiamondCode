@@ -148,7 +148,90 @@ function usePlaced() {
     emitPlacedChange();
   };
   const clearAllPlaced = () => { savePlaced([]); emitPlacedChange(); };
-  return { placed, placeBet, updateStatus, removePlaced, clearAllPlaced };
+
+  // Durably capture the closing line for each leg so CLV survives after
+  // the game falls off the slate. Only writes once per leg.
+  const captureClosings = (games) => {
+    if (!games || !games.length) return;
+    const byMatchup = {};
+    for (const g of games) {
+      byMatchup[`${g.away_team} @ ${g.home_team}`] = g;
+    }
+    let changed = false;
+    const list = loadPlaced().map(bet => {
+      const legs = bet.legs.map(leg => {
+        if (leg.closing != null) return leg;          // already captured
+        const g = byMatchup[leg.matchup];
+        if (!g) return leg;
+        // Only trust the close once the line is locked (game Live/Final)
+        const locked = g.abstract_state === "Live" || g.abstract_state === "Final";
+        if (!locked) return leg;
+        const lm = g.line_movement || {};
+        const ml = g.moneyline_data || {};
+        let closing = null;
+        if (leg.type === "UNDER" || leg.type === "OVER" || leg.type?.includes("UNDER") || leg.type?.includes("OVER")) {
+          closing = { total: lm.closing_total ?? lm.current_total ?? null };
+        } else if (leg.type === "ML") {
+          // Match team in play string to away/home
+          const play = (leg.play || "").toLowerCase();
+          const awayHit = (g.away_team || "").toLowerCase().split(" ").some(w => w && play.includes(w));
+          const aml = ml.closing_away_ml ?? ml.away_ml;
+          const hml = ml.closing_home_ml ?? ml.home_ml;
+          closing = { ml: awayHit ? aml : hml };
+        }
+        if (closing && (closing.total != null || closing.ml != null)) {
+          changed = true;
+          return { ...leg, closing };
+        }
+        return leg;
+      });
+      return { ...bet, legs };
+    });
+    if (changed) { savePlaced(list); emitPlacedChange(); }
+  };
+
+  return { placed, placeBet, updateStatus, removePlaced, clearAllPlaced, captureClosings };
+}
+
+// CLV for one leg given the price taken and the closing line.
+// Returns { pct, beat, label } or null if not computable.
+function legCLV(leg) {
+  const c = leg.closing;
+  if (!c) return null;
+  const amToImplied = (am) => am >= 0 ? 100 / (am + 100) : Math.abs(am) / (Math.abs(am) + 100);
+
+  // Totals: parse number from play "UNDER 7.5" / "OVER 7"
+  if (leg.type?.includes("UNDER") || leg.type?.includes("OVER")) {
+    if (c.total == null) return null;
+    const m = String(leg.play).match(/([\d.]+)/);
+    if (!m) return null;
+    const took = parseFloat(m[1]);
+    const close = c.total;
+    const isUnder = leg.type.includes("UNDER");
+    // UNDER: higher number = better. OVER: lower number = better.
+    const diff = isUnder ? (took - close) : (close - took);
+    const beat = diff > 0;
+    return {
+      pct: null,
+      beat: diff === 0 ? null : beat,
+      label: diff === 0 ? `= ${close} (no move)` : `${leg.play} vs close ${close} (${beat ? "+" : ""}${diff.toFixed(1)} ${beat ? "ahead" : "behind"})`,
+    };
+  }
+
+  // Moneyline: better price = lower implied prob
+  if (leg.type === "ML" && c.ml != null) {
+    const took = typeof leg.odds === "number" ? leg.odds : parseInt(leg.odds, 10);
+    if (isNaN(took)) return null;
+    const yoursImp = amToImplied(took);
+    const closeImp = amToImplied(c.ml);
+    const clv = (closeImp - yoursImp) * 100;   // positive = you beat the close
+    return {
+      pct: clv,
+      beat: Math.abs(clv) < 0.05 ? null : clv > 0,
+      label: `${took >= 0 ? "+" : ""}${took} vs close ${c.ml >= 0 ? "+" : ""}${c.ml}`,
+    };
+  }
+  return null;
 }
 
 // Compute parlay decimal odds (and resulting payout) from leg list
@@ -2017,71 +2100,183 @@ function HeroPickCard({ aiPicks }) {
   );
 }
 
-// ── Track Record strip — top of AI tab ───────────────────────────────────────
-function TrackRecordStrip() {
-  const { placed } = usePlaced();
+// ── TRACK tab — full results log + CLV (the only metric that matters) ────────
+function TrackBoard({ games }) {
+  const { placed, updateStatus, removePlaced, clearAllPlaced, captureClosings } = usePlaced();
+
+  // Auto-capture closing lines whenever the slate updates
+  useEffect(() => { captureClosings(games); }, [games]);
+
   const settled = placed.filter(b => b.status === "WON" || b.status === "LOST");
   const wins = settled.filter(b => b.status === "WON").length;
   const losses = settled.filter(b => b.status === "LOST").length;
   const pending = placed.filter(b => b.status === "PENDING").length;
 
-  // Compute units (assuming wager is in $ and units are wager/100)
-  let units = 0;
+  let units = 0, totalWagered = 0;
   for (const b of settled) {
     const dec = parlayOdds(b.legs);
     const u = b.wager / 100;
+    totalWagered += u;
     if (b.status === "WON") units += u * (dec - 1);
     else if (b.status === "LOST") units -= u;
   }
+  const roi = totalWagered > 0 ? (units / totalWagered) * 100 : null;
   const winPct = settled.length > 0 ? Math.round((wins / settled.length) * 100) : null;
-  const unitsColor = units > 0 ? "#00ff87" : units < 0 ? "#ff3b3b" : "#666";
 
-  if (placed.length === 0) {
-    return (
-      <div style={{
-        background: "#0a0a0a", border: "1px dashed #1a1a1a",
-        borderRadius: 8, padding: "10px 14px", marginBottom: 14,
-        fontSize: 9, color: "#444", textAlign: "center", letterSpacing: 1.5,
-      }}>
-        📊 NO PLACED BETS YET — TAP <strong style={{ color: "#666" }}>+ ADD</strong> ON ANY PICK,
-        OPEN THE 🎟️ SLIP, AND HIT <strong style={{ color: "#666" }}>PLACE BET</strong> TO START TRACKING
-      </div>
-    );
+  // CLV across every leg we could measure
+  let clvBeat = 0, clvTotal = 0, clvSum = 0, clvPctCount = 0;
+  for (const b of placed) {
+    for (const leg of b.legs) {
+      const c = legCLV(leg);
+      if (!c || c.beat == null) continue;
+      clvTotal += 1;
+      if (c.beat) clvBeat += 1;
+      if (c.pct != null) { clvSum += c.pct; clvPctCount += 1; }
+    }
   }
+  const clvBeatRate = clvTotal > 0 ? Math.round((clvBeat / clvTotal) * 100) : null;
+  const clvAvg = clvPctCount > 0 ? (clvSum / clvPctCount) : null;
+
+  const unitsColor = units > 0 ? "#00ff87" : units < 0 ? "#ff3b3b" : "#888";
+  const clvColor = clvBeatRate == null ? "#666" : clvBeatRate >= 55 ? "#00ff87" : clvBeatRate >= 50 ? "#fbbf24" : "#ff3b3b";
+
+  const Stat = ({ label, value, sub, color = "#fff" }) => (
+    <div style={{ background: "#0a0a0a", border: "1px solid #1a1a1a", borderRadius: 8, padding: "14px 12px", textAlign: "center" }}>
+      <div style={{ fontSize: 8, color: "#444", letterSpacing: 2, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 900, fontFamily: "monospace", color, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 8, color: "#444", marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
 
   return (
-    <div style={{
-      background: "linear-gradient(90deg, #0a0a0a, #050505)",
-      border: `1px solid ${unitsColor}30`,
-      borderRadius: 8, padding: "12px 16px", marginBottom: 16,
-      display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
-    }}>
-      <div style={{ display: "flex", gap: 18, alignItems: "baseline", flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5 }}>RECORD</div>
-          <div style={{ fontSize: 16, color: "#fff", fontWeight: 900, fontFamily: "monospace" }}>
-            {wins}-{losses}{winPct != null && <span style={{ fontSize: 10, color: "#666", marginLeft: 6 }}>{winPct}%</span>}
+    <div style={{ paddingBottom: 20 }}>
+      <div style={{
+        background: "linear-gradient(135deg, #0a0a0a, #0d1a14 80%, #0a0a0a)",
+        border: "2px solid #00ff8730", borderRadius: 10,
+        padding: "18px 20px", marginBottom: 16,
+      }}>
+        <div style={{ fontSize: 12, color: "#00ff87", letterSpacing: 3, fontWeight: 900 }}>
+          📒 TRACK RECORD
+        </div>
+        <div style={{ fontSize: 9, color: "#666", marginTop: 4, lineHeight: 1.5 }}>
+          Every bet you place is logged here. <strong style={{ color: "#888" }}>CLV (Closing Line Value)</strong> is
+          the only proven predictor of long-term profit — if you consistently beat the closing line, you win over time.
+        </div>
+      </div>
+
+      {placed.length === 0 ? (
+        <div style={{
+          background: "#0a0a0a", border: "1px dashed #1a1a1a",
+          borderRadius: 8, padding: "40px 20px", textAlign: "center",
+        }}>
+          <div style={{ fontSize: 36, marginBottom: 12, opacity: 0.3 }}>📒</div>
+          <div style={{ fontSize: 12, color: "#666", fontWeight: 700, letterSpacing: 1.5, marginBottom: 8 }}>
+            NO BETS LOGGED YET
+          </div>
+          <div style={{ fontSize: 10, color: "#444", lineHeight: 1.6, maxWidth: 320, margin: "0 auto" }}>
+            Build a slip from any pick, open the 🎟️ slip drawer, set a wager, and tap
+            <strong style={{ color: "#00ff87" }}> PLACE BET</strong>.
+            It lands here with the price you took — CLV gets measured automatically once the line closes.
           </div>
         </div>
-        <div>
-          <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5 }}>UNITS</div>
-          <div style={{ fontSize: 16, color: unitsColor, fontWeight: 900, fontFamily: "monospace" }}>
-            {units >= 0 ? "+" : ""}{units.toFixed(2)}u
+      ) : (
+        <>
+          {/* Stat grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 12 }}>
+            <Stat label="RECORD" value={`${wins}-${losses}`} sub={winPct != null ? `${winPct}% win` : `${pending} pending`} />
+            <Stat label="UNITS" value={`${units >= 0 ? "+" : ""}${units.toFixed(2)}u`} color={unitsColor} sub={roi != null ? `${roi >= 0 ? "+" : ""}${roi.toFixed(1)}% ROI` : "—"} />
+            <Stat label="BEAT THE CLOSE" value={clvBeatRate != null ? `${clvBeatRate}%` : "—"} color={clvColor} sub={`${clvBeat}/${clvTotal} legs`} />
+            <Stat label="AVG CLV" value={clvAvg != null ? `${clvAvg >= 0 ? "+" : ""}${clvAvg.toFixed(2)}%` : "—"} color={clvColor} sub="ML legs only" />
           </div>
-        </div>
-        {pending > 0 && (
-          <div>
-            <div style={{ fontSize: 8, color: "#444", letterSpacing: 1.5 }}>PENDING</div>
-            <div style={{ fontSize: 16, color: "#fbbf24", fontWeight: 900, fontFamily: "monospace" }}>
-              {pending}
+
+          {/* CLV verdict */}
+          {clvBeatRate != null && clvTotal >= 5 && (
+            <div style={{
+              fontSize: 10, lineHeight: 1.5, padding: "10px 14px", marginBottom: 16,
+              background: clvColor + "10", border: `1px solid ${clvColor}30`, borderRadius: 6,
+              color: clvColor,
+            }}>
+              {clvBeatRate >= 55
+                ? `✓ You're beating the close ${clvBeatRate}% of the time. That's the signature of a profitable bettor — keep doing exactly this.`
+                : clvBeatRate >= 50
+                ? `~ You're roughly even with the close (${clvBeatRate}%). Not losing to the market, but not beating it yet. Need a real edge to profit after vig.`
+                : `✗ You're getting worse prices than the close (${clvBeatRate}%). Long-term this loses money regardless of short-term W/L. The picks aren't finding value.`}
+              {clvTotal < 20 && <span style={{ color: "#666", display: "block", marginTop: 4 }}>Sample still small ({clvTotal} legs) — needs ~30+ to trust.</span>}
             </div>
-          </div>
-        )}
-      </div>
-      <div style={{ fontSize: 9, color: "#444", textAlign: "right", lineHeight: 1.4 }}>
-        TAP THE 🎟️ SLIP<br />
-        TO MARK W/L
-      </div>
+          )}
+
+          {/* Bet log */}
+          <div style={{ fontSize: 9, color: "#444", letterSpacing: 2, marginBottom: 8 }}>BET LOG</div>
+          {placed.map(b => {
+            const dec = parlayOdds(b.legs);
+            const pay = b.wager * dec;
+            const sc = b.status === "WON" ? "#00ff87" : b.status === "LOST" ? "#ff3b3b" : b.status === "PUSH" ? "#888" : "#fbbf24";
+            const d = new Date(b.placedAt).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+            const t = new Date(b.placedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" });
+            return (
+              <div key={b.id} style={{
+                background: "#0a0a0a", border: `1px solid ${sc}40`,
+                borderRadius: 8, padding: "12px 14px", marginBottom: 8,
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 8, color: "#444", letterSpacing: 1 }}>
+                    {d} {t} PT · {b.legs.length}-LEG · ${b.wager} → ${pay.toFixed(2)}
+                  </div>
+                  <span style={{
+                    fontSize: 9, fontWeight: 900, letterSpacing: 1, color: sc,
+                    background: sc + "18", border: `1px solid ${sc}50`,
+                    padding: "1px 7px", borderRadius: 3,
+                  }}>{b.status}</span>
+                </div>
+                {b.legs.map((leg, i) => {
+                  const clv = legCLV(leg);
+                  const cc = clv?.beat == null ? "#666" : clv.beat ? "#00ff87" : "#ff3b3b";
+                  return (
+                    <div key={i} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: i < b.legs.length - 1 ? "1px solid #141414" : "none" }}>
+                      <div style={{ fontSize: 11, color: "#ddd" }}>
+                        <span style={{ color: "#555" }}>#{i + 1} </span>{leg.play}
+                        <span style={{ color: "#fbbf24", marginLeft: 6, fontFamily: "monospace" }}>
+                          {leg.odds >= 0 ? `+${leg.odds}` : leg.odds}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 8, color: "#444", marginLeft: 14 }}>{leg.matchup}</div>
+                      {clv ? (
+                        <div style={{ fontSize: 9, color: cc, marginLeft: 14, marginTop: 2, fontFamily: "monospace" }}>
+                          {clv.beat == null ? "◦" : clv.beat ? "✓ BEAT CLOSE" : "✗ LOST CLV"}
+                          {clv.pct != null && ` ${clv.pct >= 0 ? "+" : ""}${clv.pct.toFixed(2)}%`}
+                          <span style={{ color: "#444", marginLeft: 6 }}>· {clv.label}</span>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 8, color: "#333", marginLeft: 14, marginTop: 2 }}>
+                          CLV pending — captured once the line closes
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                  {b.status === "PENDING" ? (
+                    <div style={{ display: "flex", gap: 5 }}>
+                      <button onClick={() => updateStatus(b.id, "WON")} style={{ background: "#00ff8718", color: "#00ff87", border: "1px solid #00ff8750", borderRadius: 4, fontSize: 9, fontWeight: 800, padding: "4px 12px", cursor: "pointer", fontFamily: "monospace" }}>✓ WON</button>
+                      <button onClick={() => updateStatus(b.id, "LOST")} style={{ background: "#ff3b3b18", color: "#ff3b3b", border: "1px solid #ff3b3b50", borderRadius: 4, fontSize: 9, fontWeight: 800, padding: "4px 12px", cursor: "pointer", fontFamily: "monospace" }}>✗ LOST</button>
+                      <button onClick={() => updateStatus(b.id, "PUSH")} style={{ background: "#88888818", color: "#888", border: "1px solid #88888850", borderRadius: 4, fontSize: 9, fontWeight: 800, padding: "4px 12px", cursor: "pointer", fontFamily: "monospace" }}>= PUSH</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => updateStatus(b.id, "PENDING")} style={{ background: "transparent", color: "#444", border: "1px solid #1a1a1a", borderRadius: 4, fontSize: 8, padding: "3px 10px", cursor: "pointer", fontFamily: "monospace" }}>UNDO</button>
+                  )}
+                  <button onClick={() => removePlaced(b.id)} style={{ background: "transparent", border: "none", color: "#333", fontSize: 15, cursor: "pointer" }}>×</button>
+                </div>
+              </div>
+            );
+          })}
+          <button onClick={() => { if (confirm("Wipe the entire track record? This cannot be undone.")) clearAllPlaced(); }} style={{
+            width: "100%", marginTop: 8, background: "transparent",
+            border: "1px solid #1a1a1a", color: "#444",
+            fontSize: 9, fontFamily: "monospace", letterSpacing: 1.5,
+            padding: "10px", borderRadius: 6, cursor: "pointer",
+          }}>RESET TRACK RECORD</button>
+        </>
+      )}
     </div>
   );
 }
@@ -2823,9 +3018,6 @@ function AIBoard({ aiPicks, allGames }) {
 
   return (
     <div>
-      {/* TRACK RECORD — your placed bets, W/L, units */}
-      <TrackRecordStrip />
-
       {/* HERO PICK — biggest single mispricing of the day */}
       <HeroPickCard aiPicks={aiPicks} />
 
@@ -3754,6 +3946,7 @@ function DiamondCode() {
             { key: "ai",    label: "🧠 AI PICKS", desc: "Recs + parlay of the day" },
             { key: "slate", label: "📋 SLATE",    desc: "Full under + dog model" },
             { key: "edge",  label: "⚡ EDGE",     desc: "NRFI · F5 · Pen · TT" },
+            { key: "track", label: "📒 TRACK",    desc: "Record · CLV · results" },
           ].map(({ key, label, desc }) => (
             <button key={key} onClick={() => setView(key)} style={{
               flex: 1, background: "transparent",
@@ -3831,6 +4024,8 @@ function DiamondCode() {
       {!loading && view === "edge" && <EdgeBoard games={allGames} />}
 
       {!loading && view === "ai" && <AIBoard aiPicks={aiPicks} allGames={allGames} />}
+
+      {view === "track" && <TrackBoard games={allGames} />}
 
       {!loading && view === "slate" && displayed.length === 0 && !error && (
         <div style={{ textAlign: "center", padding: "40px 0", color: "#2a2a2a", fontSize: 11 }}>No games match this filter.</div>
