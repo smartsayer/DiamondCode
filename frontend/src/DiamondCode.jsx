@@ -2407,7 +2407,7 @@ function FormulaParlayCard({ parlay }) {
                   <span style={{ color: GOLD }}>#{gi + 1}</span> {g.matchup}
                 </div>
                 <div style={{ fontSize: 8, color: "#666", fontFamily: "monospace" }}>
-                  U:{g.under_score} · F5:{g.f5_score} · Fav:{g.fav_score}
+                  U:{g.under_score} · F5:{g.f5_score} · {g.ctrl_role === "DOG +1.5" ? "Dog" : "Fav"}:{g.ctrl_score}
                 </div>
               </div>
 

@@ -42,7 +42,7 @@ class AIPicksEngine:
         f5_under_parlay = self._build_f5_under_parlay(clean)
         best_edge_parlay = self._build_best_edge_parlay(top_unders, top_dogs, broad_faves)
         sharp_parlay = self._build_sharp_parlay(clean)
-        formula_parlay = self._build_formula_parlay(clean, top_unders, broad_faves)
+        formula_parlay = self._build_formula_parlay(clean, top_unders, broad_faves, top_dogs)
         rankings = self._rank_full_board(preview, flagged_pks)
         watch_list = self._build_watch_list(clean)
         skip_list = self._build_skip_list(clean)
@@ -1997,23 +1997,25 @@ class AIPicksEngine:
         games: list[dict[str, Any]],
         top_unders: list[dict[str, Any]],
         broad_faves: list[dict[str, Any]],
+        top_dogs: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """
         THE FORMULA — self-contained correlated parlay.
 
         Each qualifying game contributes a correlated TRIO:
           • Full-game UNDER
-          • Favorite MONEYLINE
+          • TEAM CONTROL: Favorite ML  OR  Dog +1.5 RL (whichever edges better)
           • F5 UNDER
 
-        These aren't 3 independent bets — they're one thesis ("low-scoring
-        game the better team controls early") expressed three ways. The book
-        prices them independently; they're positively correlated. That gap
-        is the edge. Up to 4 games. We surface BOTH the book-priced (naive,
-        independent) EV and a correlation-adjusted estimate.
+        These aren't 3 independent bets — they're one thesis ("low-scoring,
+        tightly-played game") expressed three ways. A fav ML and a dog +1.5
+        are BOTH positively correlated with the under: low totals mean close
+        games with no blowouts. The book prices them independently. That gap
+        is the edge. Up to 4 games.
         """
         under_by_pk = {u.get("game_pk"): u for u in top_unders}
         fave_by_pk = {f.get("game_pk"): f for f in broad_faves}
+        dog_by_pk = {d.get("game_pk"): d for d in (top_dogs or [])}
 
         clusters = []
         for g in games:
@@ -2023,37 +2025,76 @@ class AIPicksEngine:
             f5_line = f5.get("projected_f5_line")
             u = under_by_pk.get(pk)
             f = fave_by_pk.get(pk)
+            d = dog_by_pk.get(pk)
 
-            # All three signals must be present and meaningful
-            if not u or not f:
+            # UNDER + F5 are mandatory; the control leg can be fav OR dog +1.5
+            if not u:
                 continue
             under_score = u.get("under_score", 0)
             total = u.get("closing_total")
-            fav_ml = f.get("moneyline")
-            fav_team = f.get("fav_team")
-            fav_score = f.get("fav_score", 0)
-            if total is None or fav_ml is None or fav_team is None:
-                continue
-            if under_score < 55 or f5_score < 55 or fav_score < 50:
+            if total is None or under_score < 55 or f5_score < 55:
                 continue
 
-            # Correlation strength — under + F5 weighted heavier (core thesis)
-            corr_strength = under_score * 0.40 + f5_score * 0.35 + fav_score * 0.25
+            # ── Build candidate "team control" legs ───────────────────────
+            matchup = f"{g.get('away_team')} @ {g.get('home_team')}"
+            control_options = []
 
-            # ── Price each leg honestly (standalone EV) ───────────────────
+            fav_ml = f.get("moneyline") if f else None
+            fav_team = f.get("fav_team") if f else None
+            fav_score = f.get("fav_score", 0) if f else 0
+            if f and fav_ml is not None and fav_team and fav_score >= 50:
+                fav_base = pricing.american_to_prob(fav_ml)
+                fav_prob = max(0.45, min(0.85, fav_base + (fav_score - 50) * 0.0010))
+                fav_edge = pricing.price_leg(fav_prob, fav_ml)
+                control_options.append({
+                    "play": f"{fav_team} ML", "type": "FORMULA_FAV_ML",
+                    "odds": fav_ml, "edge": fav_edge, "our_prob": fav_prob,
+                    "leg_role": "FAVORITE ML", "ctrl_score": fav_score,
+                })
+
+            dog_ml = d.get("moneyline") if d else None
+            dog_team = d.get("dog_team") if d else None
+            dog_score = d.get("dog_score", 0) if d else 0
+            if d and dog_ml is not None and dog_team and dog_score >= 50:
+                base_cover = pricing.dog_rl_cover_prob_from_ml(dog_ml)
+                dog_prob = max(0.50, min(0.92, base_cover + (dog_score - 50) * 0.0010))
+                # Dog +1.5 is the FAVORED side (negative odds). Fair price from
+                # cover prob, then a ~4% vig haircut so we don't over-credit.
+                rl_odds = pricing.prob_to_american(min(0.96, base_cover * 1.04))
+                dog_edge = pricing.price_leg(dog_prob, rl_odds)
+                control_options.append({
+                    "play": f"{dog_team} +1.5 RL", "type": "FORMULA_DOG_RL",
+                    "odds": rl_odds, "edge": dog_edge, "our_prob": dog_prob,
+                    "leg_role": "DOG +1.5", "ctrl_score": dog_score,
+                })
+
+            if not control_options:
+                continue
+
+            # Pick the better-edge control leg (fall back to higher prob)
+            control_options.sort(
+                key=lambda o: (
+                    o["edge"].get("edge_pct") if o["edge"].get("edge_pct") is not None else -999,
+                    o["our_prob"],
+                ),
+                reverse=True,
+            )
+            control = control_options[0]
+
+            # Correlation strength — under + F5 weighted heaviest (core thesis)
+            corr_strength = (
+                under_score * 0.40 + f5_score * 0.35 + control["ctrl_score"] * 0.25
+            )
+
+            # ── UNDER + F5 legs (always present) ──────────────────────────
             under_odds = u.get("best_price") or -110
             under_prob = pricing.under_prob_from_score(under_score)
             under_edge = pricing.price_leg(under_prob, under_odds)
 
-            fav_base = pricing.american_to_prob(fav_ml)
-            fav_prob = max(0.45, min(0.85, fav_base + (fav_score - 50) * 0.0010))
-            fav_edge = pricing.price_leg(fav_prob, fav_ml)
-
-            f5_odds = -120  # F5 unders carry standard juice
+            f5_odds = -120
             f5_prob = pricing.under_prob_from_score(f5_score)
             f5_edge = pricing.price_leg(f5_prob, f5_odds)
 
-            matchup = f"{g.get('away_team')} @ {g.get('home_team')}"
             legs = [
                 {
                     "matchup": matchup, "play": f"UNDER {total}",
@@ -2062,10 +2103,10 @@ class AIPicksEngine:
                     "leg_role": "GAME UNDER",
                 },
                 {
-                    "matchup": matchup, "play": f"{fav_team} ML",
-                    "type": "FORMULA_FAV_ML", "odds": fav_ml,
-                    "edge": fav_edge, "our_prob": fav_prob,
-                    "leg_role": "FAVORITE ML",
+                    "matchup": matchup, "play": control["play"],
+                    "type": control["type"], "odds": control["odds"],
+                    "edge": control["edge"], "our_prob": control["our_prob"],
+                    "leg_role": control["leg_role"],
                 },
                 {
                     "matchup": matchup,
@@ -2077,14 +2118,14 @@ class AIPicksEngine:
             ]
 
             # Naive (independent) triple probability — what the book prices off
-            naive_triple = under_prob * fav_prob * f5_prob
+            naive_triple = under_prob * control["our_prob"] * f5_prob
             # Correlation-adjusted, HONESTLY bounded. Hard ceiling: P(A∩B∩C)
             # can never exceed its least-likely leg. Positive correlation
             # moves the true joint a CONSERVATIVE fraction of the way from
             # independent toward that ceiling. 0.30 = moderate correlation
             # (transparent knob). This keeps the estimate believable instead
             # of fabricating a 100%+ "CRUSH" the way naive p**k would.
-            min_leg = min(under_prob, fav_prob, f5_prob)
+            min_leg = min(under_prob, control["our_prob"], f5_prob)
             _CORR_FACTOR = 0.30
             corr_triple = naive_triple + _CORR_FACTOR * (min_leg - naive_triple)
 
@@ -2097,8 +2138,9 @@ class AIPicksEngine:
                 "corr_triple": corr_triple,
                 "under_score": round(under_score, 1),
                 "f5_score": round(f5_score, 1),
-                "fav_score": round(fav_score, 1),
-                "fav_team": fav_team,
+                "ctrl_score": round(control["ctrl_score"], 1),
+                "ctrl_role": control["leg_role"],
+                "ctrl_team": control["play"].rsplit(" ", 1)[0] if control["type"] == "FORMULA_FAV_ML" else control["play"].replace(" +1.5 RL", ""),
             })
 
         if not clusters:
@@ -2141,7 +2183,7 @@ class AIPicksEngine:
             book_implied_pct = None
 
         structure = " + ".join(
-            f"{c['fav_team'].split()[-1]}" for c in top
+            c["ctrl_team"].split()[-1] for c in top
         )
 
         return {
@@ -2149,11 +2191,12 @@ class AIPicksEngine:
             "games": [
                 {
                     "matchup": c["matchup"],
-                    "fav_team": c["fav_team"],
+                    "ctrl_team": c["ctrl_team"],
+                    "ctrl_role": c["ctrl_role"],
                     "corr_strength": c["corr_strength"],
                     "under_score": c["under_score"],
                     "f5_score": c["f5_score"],
-                    "fav_score": c["fav_score"],
+                    "ctrl_score": c["ctrl_score"],
                     "legs": c["legs"],
                     "naive_triple_pct": round(c["naive_triple"] * 100, 1),
                     "corr_triple_pct": round(c["corr_triple"] * 100, 1),
