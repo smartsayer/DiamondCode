@@ -128,6 +128,21 @@ def _map_an_game(game: dict) -> Optional[dict[str, Any]]:
                 ],
             })
 
+        # Run line (spread) — REAL ±1.5 prices, not estimated
+        sp_away = _safe_float(odd.get("spread_away"))
+        sp_home = _safe_float(odd.get("spread_home"))
+        sp_away_line = _safe_int(odd.get("spread_away_line"))
+        sp_home_line = _safe_int(odd.get("spread_home_line"))
+        if (sp_away is not None and sp_home is not None
+                and sp_away_line is not None and sp_home_line is not None):
+            markets.append({
+                "key": "spreads",
+                "outcomes": [
+                    {"name": away_name, "point": sp_away, "price": sp_away_line},
+                    {"name": home_name, "point": sp_home, "price": sp_home_line},
+                ],
+            })
+
         if markets:
             bookmakers.append({"key": bk_key, "title": bk_title, "markets": markets})
 

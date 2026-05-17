@@ -211,6 +211,9 @@ class LineMovementService:
         else:
             dog_side = None
 
+        # Real run-line (±1.5) prices from the spreads market, if the feed has them
+        rl = self._extract_rl(match, away_team, home_team)
+
         return {
             "dog_side": dog_side,
             "away_ml": away_ml,
@@ -221,6 +224,12 @@ class LineMovementService:
             "live_home_ml": live_home,
             "book": book_used,
             "odds_sourced": away_ml is not None,
+            # Real RL prices (None if the book didn't post a spread)
+            "away_rl_point": rl["away_point"],
+            "home_rl_point": rl["home_point"],
+            "away_rl_price": rl["away_price"],
+            "home_rl_price": rl["home_price"],
+            "rl_sourced": rl["away_price"] is not None,
         }
 
     def best_prices(
@@ -362,6 +371,32 @@ class LineMovementService:
                         return away_ml, home_ml, bookmaker.get("title", bm_key)
 
         return None, None, None
+
+    def _extract_rl(
+        self, game: dict, away_team: str, home_team: str
+    ) -> dict:
+        """Pull real run-line (spread) point + price for each side."""
+        away_lower = away_team.lower()
+        home_lower = home_team.lower()
+        for bm_key in SHARP_BOOK_PRIORITY:
+            for bookmaker in game.get("bookmakers", []):
+                if bookmaker.get("key") != bm_key:
+                    continue
+                for market in bookmaker.get("markets", []):
+                    if market.get("key") != "spreads":
+                        continue
+                    ap = hp = apx = hpx = None
+                    for o in market.get("outcomes", []):
+                        name = (o.get("name") or "").lower()
+                        if any(w in name for w in away_lower.split()):
+                            ap, apx = o.get("point"), o.get("price")
+                        elif any(w in name for w in home_lower.split()):
+                            hp, hpx = o.get("point"), o.get("price")
+                    if apx is not None and hpx is not None:
+                        return {"away_point": ap, "home_point": hp,
+                                "away_price": apx, "home_price": hpx}
+        return {"away_point": None, "home_point": None,
+                "away_price": None, "home_price": None}
 
     def _cache_key(self, away: str, home: str) -> str:
         return f"{away.lower().split()[-1]}_{home.lower().split()[-1]}"

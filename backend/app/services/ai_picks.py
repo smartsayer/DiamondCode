@@ -683,6 +683,9 @@ class AIPicksEngine:
                 "best_book": (g.get("best_prices", {}) or {}).get(f"best_{fav_side}_ml_book"),
                 "best_price": (g.get("best_prices", {}) or {}).get(f"best_{fav_side}_ml"),
                 "play_suggestion": self._fav_play_suggestion(fav_ml, fav_score),
+                # Real -1.5 RL price for the fav side (None if book didn't post it)
+                "rl_price": ml.get(f"{fav_side}_rl_price") if ml.get("rl_sourced") else None,
+                "rl_point": ml.get(f"{fav_side}_rl_point") if ml.get("rl_sourced") else None,
                 "_game": g,
             })
         return sorted(recs, key=lambda x: x["fav_score"], reverse=True)
@@ -1772,6 +1775,9 @@ class AIPicksEngine:
                 "reasons": reasons,
                 "best_book": (g.get("best_prices", {}) or {}).get(f"best_{actual}_ml_book"),
                 "best_price": (g.get("best_prices", {}) or {}).get(f"best_{actual}_ml"),
+                # Real +1.5 RL price for the dog side (None if not posted)
+                "rl_price": ml.get(f"{actual}_rl_price") if ml.get("rl_sourced") else None,
+                "rl_point": ml.get(f"{actual}_rl_point") if ml.get("rl_sourced") else None,
                 "_game": g,
             })
         return sorted(recs, key=lambda x: x["dog_score"], reverse=True)
@@ -2091,9 +2097,9 @@ class AIPicksEngine:
             if d and dog_ml is not None and dog_team and dog_score >= 50:
                 base_cover = pricing.dog_rl_cover_prob_from_ml(dog_ml)
                 dog_prob = max(0.50, min(0.92, base_cover + (dog_score - 50) * 0.0010))
-                # Dog +1.5 is the FAVORED side (negative odds). Fair price from
-                # cover prob, then a ~4% vig haircut so we don't over-credit.
-                rl_odds = pricing.prob_to_american(min(0.96, base_cover * 1.04))
+                # Prefer the REAL +1.5 price; estimate (cover prob − 4% vig)
+                # only when the book didn't post a spread.
+                rl_odds = d.get("rl_price") or pricing.prob_to_american(min(0.96, base_cover * 1.04))
                 dog_edge = pricing.price_leg(dog_prob, rl_odds)
                 control_options.append({
                     "play": f"{dog_team} +1.5 RL", "type": "FORMULA_DOG_RL",
@@ -2413,7 +2419,9 @@ class AIPicksEngine:
                 continue
             score = f.get("fav_score", 50)
             our_prob = pricing.fav_cover_prob_from_score(score, ml, 1.5)
-            rl_odds = self._estimate_fav_rl_odds(ml)
+            # Prefer the REAL run-line price; fall back to estimate only
+            # when the book didn't post a spread.
+            rl_odds = f.get("rl_price") or self._estimate_fav_rl_odds(ml)
             e = pricing.price_leg(our_prob, rl_odds)
             if e.get("edge_pct") is None or e["edge_pct"] < 0.0:
                 continue
@@ -2457,10 +2465,10 @@ class AIPicksEngine:
             score = d.get("dog_score", 50)
             base_cover = pricing.dog_rl_cover_prob_from_ml(ml)
             our_prob = max(0.50, min(0.92, base_cover + (score - 50) * 0.0010))
-            # +1.5 is the FAVORED side (negative odds). Fair price from the
-            # cover prob with a ~4% vig haircut — NOT _estimate_dog_rl_odds,
-            # which returns the dog -1.5 (win-by-2) longshot price.
-            rl_odds = pricing.prob_to_american(min(0.96, base_cover * 1.04))
+            # Prefer the REAL +1.5 price; estimate only as fallback.
+            # (+1.5 is the favored side → negative odds; estimate uses the
+            # cover prob with a 4% vig haircut, never the -1.5 longshot price.)
+            rl_odds = d.get("rl_price") or pricing.prob_to_american(min(0.96, base_cover * 1.04))
             e = pricing.price_leg(our_prob, rl_odds)
             if e.get("edge_pct") is None or e["edge_pct"] < 0.0:
                 continue
