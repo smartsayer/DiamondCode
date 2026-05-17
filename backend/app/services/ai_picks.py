@@ -2002,16 +2002,16 @@ class AIPicksEngine:
         """
         THE FORMULA — self-contained correlated parlay.
 
-        Each qualifying game contributes a correlated TRIO:
-          • Full-game UNDER
-          • TEAM CONTROL: Favorite ML  OR  Dog +1.5 RL (whichever edges better)
-          • F5 UNDER
+        Each qualifying game contributes a correlated PAIR:
+          • UNDER  — best of {full-game UNDER, F5 UNDER}  (never both;
+            books block two correlated unders on one parlay)
+          • TEAM CONTROL — Favorite ML OR Dog +1.5 RL (whichever edges
+            better)
 
-        These aren't 3 independent bets — they're one thesis ("low-scoring,
-        tightly-played game") expressed three ways. A fav ML and a dog +1.5
-        are BOTH positively correlated with the under: low totals mean close
-        games with no blowouts. The book prices them independently. That gap
-        is the edge. Up to 4 games.
+        These aren't independent bets — they're one thesis ("low-scoring,
+        tightly-played game"). The control leg is positively correlated
+        with the under: low totals mean close games with no blowouts. The
+        book prices them independently. That gap is the edge. Up to 4 games.
         """
         under_by_pk = {u.get("game_pk"): u for u in top_unders}
         fave_by_pk = {f.get("game_pk"): f for f in broad_faves}
@@ -2027,16 +2027,45 @@ class AIPicksEngine:
             f = fave_by_pk.get(pk)
             d = dog_by_pk.get(pk)
 
-            # UNDER + F5 are mandatory; the control leg can be fav OR dog +1.5
-            if not u:
+            # ── Pick ONE under per game ───────────────────────────────────
+            # Books treat full-game UNDER and F5 UNDER as correlated and
+            # block them on the same parlay. We keep whichever has the
+            # better edge — never both.
+            matchup = f"{g.get('away_team')} @ {g.get('home_team')}"
+            under_score = (u or {}).get("under_score", 0)
+            total = (u or {}).get("closing_total")
+            under_options = []
+            if u and total is not None and under_score >= 55:
+                u_odds = u.get("best_price") or -110
+                u_prob = pricing.under_prob_from_score(under_score)
+                under_options.append({
+                    "play": f"UNDER {total}", "type": "FORMULA_UNDER",
+                    "odds": u_odds, "edge": pricing.price_leg(u_prob, u_odds),
+                    "our_prob": u_prob, "leg_role": "GAME UNDER",
+                    "u_score": under_score,
+                })
+            if f5_score >= 55:
+                f5_odds = -120
+                f5_prob = pricing.under_prob_from_score(f5_score)
+                under_options.append({
+                    "play": f"F5 UNDER {f5_line}" if f5_line else "F5 UNDER",
+                    "type": "FORMULA_F5_UNDER", "odds": f5_odds,
+                    "edge": pricing.price_leg(f5_prob, f5_odds),
+                    "our_prob": f5_prob, "leg_role": "F5 UNDER",
+                    "u_score": f5_score,
+                })
+            if not under_options:
                 continue
-            under_score = u.get("under_score", 0)
-            total = u.get("closing_total")
-            if total is None or under_score < 55 or f5_score < 55:
-                continue
+            under_options.sort(
+                key=lambda o: (
+                    o["edge"].get("edge_pct") if o["edge"].get("edge_pct") is not None else -999,
+                    o["our_prob"],
+                ),
+                reverse=True,
+            )
+            under_leg = under_options[0]
 
             # ── Build candidate "team control" legs ───────────────────────
-            matchup = f"{g.get('away_team')} @ {g.get('home_team')}"
             control_options = []
 
             fav_ml = f.get("moneyline") if f else None
@@ -2081,26 +2110,15 @@ class AIPicksEngine:
             )
             control = control_options[0]
 
-            # Correlation strength — under + F5 weighted heaviest (core thesis)
-            corr_strength = (
-                under_score * 0.40 + f5_score * 0.35 + control["ctrl_score"] * 0.25
-            )
-
-            # ── UNDER + F5 legs (always present) ──────────────────────────
-            under_odds = u.get("best_price") or -110
-            under_prob = pricing.under_prob_from_score(under_score)
-            under_edge = pricing.price_leg(under_prob, under_odds)
-
-            f5_odds = -120
-            f5_prob = pricing.under_prob_from_score(f5_score)
-            f5_edge = pricing.price_leg(f5_prob, f5_odds)
+            # Correlation strength — the under leg carries the core thesis
+            corr_strength = under_leg["u_score"] * 0.58 + control["ctrl_score"] * 0.42
 
             legs = [
                 {
-                    "matchup": matchup, "play": f"UNDER {total}",
-                    "type": "FORMULA_UNDER", "odds": under_odds,
-                    "edge": under_edge, "our_prob": under_prob,
-                    "leg_role": "GAME UNDER",
+                    "matchup": matchup, "play": under_leg["play"],
+                    "type": under_leg["type"], "odds": under_leg["odds"],
+                    "edge": under_leg["edge"], "our_prob": under_leg["our_prob"],
+                    "leg_role": under_leg["leg_role"],
                 },
                 {
                     "matchup": matchup, "play": control["play"],
@@ -2108,24 +2126,17 @@ class AIPicksEngine:
                     "edge": control["edge"], "our_prob": control["our_prob"],
                     "leg_role": control["leg_role"],
                 },
-                {
-                    "matchup": matchup,
-                    "play": f"F5 UNDER {f5_line}" if f5_line else "F5 UNDER",
-                    "type": "FORMULA_F5_UNDER", "odds": f5_odds,
-                    "edge": f5_edge, "our_prob": f5_prob,
-                    "leg_role": "F5 UNDER",
-                },
             ]
 
-            # Naive (independent) triple probability — what the book prices off
-            naive_triple = under_prob * control["our_prob"] * f5_prob
-            # Correlation-adjusted, HONESTLY bounded. Hard ceiling: P(A∩B∩C)
+            # Naive (independent) PAIR probability — what the book prices off
+            naive_triple = under_leg["our_prob"] * control["our_prob"]
+            # Correlation-adjusted, HONESTLY bounded. Hard ceiling: P(A∩B)
             # can never exceed its least-likely leg. Positive correlation
             # moves the true joint a CONSERVATIVE fraction of the way from
             # independent toward that ceiling. 0.30 = moderate correlation
-            # (transparent knob). This keeps the estimate believable instead
-            # of fabricating a 100%+ "CRUSH" the way naive p**k would.
-            min_leg = min(under_prob, control["our_prob"], f5_prob)
+            # (transparent knob). Keeps the estimate believable instead of
+            # fabricating a "CRUSH" the way naive p**k would.
+            min_leg = min(under_leg["our_prob"], control["our_prob"])
             _CORR_FACTOR = 0.30
             corr_triple = naive_triple + _CORR_FACTOR * (min_leg - naive_triple)
 
@@ -2209,11 +2220,11 @@ class AIPicksEngine:
             "book_implied_pct": book_implied_pct,
             "joint_naive_pct": round(joint_naive * 100, 2),
             "joint_corr_pct": round(joint_corr * 100, 2),
-            "note": f"{len(top)}-game correlated stack · {len(all_legs)} legs. "
-                    f"Each game's 3 legs rise and fall together — the book "
-                    f"prices them independent. No parlay-EV headline on purpose: "
-                    f"stacking compounds model error. Per-leg edges + correlation "
-                    f"lift below; the TRACK tab is the judge.",
+            "note": f"{len(top)}-game correlated stack · {len(all_legs)} legs "
+                    f"(2 per game — one under + control; books block two "
+                    f"correlated unders on one ticket). No parlay-EV headline "
+                    f"on purpose: stacking compounds model error. Per-leg edges "
+                    f"+ correlation lift below; the TRACK tab is the judge.",
         }
 
     def _build_sharp_parlay(self, games: list[dict[str, Any]]) -> dict[str, Any]:
