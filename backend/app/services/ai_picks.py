@@ -2455,9 +2455,12 @@ class AIPicksEngine:
             if ml is None:
                 continue
             score = d.get("dog_score", 50)
-            our_prob = pricing.dog_rl_cover_prob_from_ml(ml)
-            our_prob = max(0.50, min(0.92, our_prob + (score - 50) * 0.0010))
-            rl_odds = self._estimate_dog_rl_odds(ml)
+            base_cover = pricing.dog_rl_cover_prob_from_ml(ml)
+            our_prob = max(0.50, min(0.92, base_cover + (score - 50) * 0.0010))
+            # +1.5 is the FAVORED side (negative odds). Fair price from the
+            # cover prob with a ~4% vig haircut — NOT _estimate_dog_rl_odds,
+            # which returns the dog -1.5 (win-by-2) longshot price.
+            rl_odds = pricing.prob_to_american(min(0.96, base_cover * 1.04))
             e = pricing.price_leg(our_prob, rl_odds)
             if e.get("edge_pct") is None or e["edge_pct"] < 0.0:
                 continue
