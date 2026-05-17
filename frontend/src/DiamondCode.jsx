@@ -131,15 +131,42 @@ function usePlaced() {
     list.unshift({
       id: `bet_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       placedAt: new Date().toISOString(),
-      legs: legs.map(l => ({ ...l })),
+      legs: legs.map(l => ({ ...l, result: "PENDING" })),  // per-leg result
       wager: parseFloat(wager) || 0,
-      status: "PENDING",   // PENDING | WON | LOST | PUSH
+      status: "PENDING",   // ticket status — auto-derived from legs
     });
     savePlaced(list);
     emitPlacedChange();
   };
+  // Ticket outcome derived from leg results: any LOST → LOST;
+  // all WON/PUSH (≥1 WON) → WON; all PUSH → PUSH; else PENDING.
+  const deriveStatus = (legs) => {
+    const r = legs.map(l => l.result || "PENDING");
+    if (r.includes("LOST")) return "LOST";
+    if (r.includes("PENDING")) return "PENDING";
+    if (r.every(x => x === "PUSH")) return "PUSH";
+    return "WON";  // all WON, or WON+PUSH
+  };
+  const updateLegStatus = (id, legIndex, result) => {
+    const list = loadPlaced().map(b => {
+      if (b.id !== id) return b;
+      const legs = b.legs.map((l, i) => i === legIndex ? { ...l, result } : l);
+      return { ...b, legs, status: deriveStatus(legs), settledAt: new Date().toISOString() };
+    });
+    savePlaced(list);
+    emitPlacedChange();
+  };
+  // Settle every leg of a ticket at once (quick path).
   const updateStatus = (id, status) => {
-    const list = loadPlaced().map(b => b.id === id ? { ...b, status, settledAt: new Date().toISOString() } : b);
+    const list = loadPlaced().map(b => {
+      if (b.id !== id) return b;
+      if (status === "PENDING") {
+        const legs = b.legs.map(l => ({ ...l, result: "PENDING" }));
+        return { ...b, legs, status: "PENDING", settledAt: undefined };
+      }
+      const legs = b.legs.map(l => ({ ...l, result: status }));
+      return { ...b, legs, status: deriveStatus(legs), settledAt: new Date().toISOString() };
+    });
     savePlaced(list);
     emitPlacedChange();
   };
@@ -190,7 +217,7 @@ function usePlaced() {
     if (changed) { savePlaced(list); emitPlacedChange(); }
   };
 
-  return { placed, placeBet, updateStatus, removePlaced, clearAllPlaced, captureClosings };
+  return { placed, placeBet, updateStatus, updateLegStatus, removePlaced, clearAllPlaced, captureClosings };
 }
 
 // CLV for one leg given the price taken and the closing line.
@@ -2100,13 +2127,13 @@ function HeroPickCard({ aiPicks }) {
   );
 }
 
-// ── TRACK tab — full results log + CLV (the only metric that matters) ────────
+// ── TRACK tab — ticket record + per-leg hit rate + by-model breakdown ───────
 function TrackBoard({ games }) {
-  const { placed, updateStatus, removePlaced, clearAllPlaced, captureClosings } = usePlaced();
+  const { placed, updateStatus, updateLegStatus, removePlaced, clearAllPlaced, captureClosings } = usePlaced();
 
-  // Auto-capture closing lines whenever the slate updates
   useEffect(() => { captureClosings(games); }, [games]);
 
+  // ── Ticket-level (bankroll / variance truth) ────────────────────────────
   const settled = placed.filter(b => b.status === "WON" || b.status === "LOST");
   const wins = settled.filter(b => b.status === "WON").length;
   const losses = settled.filter(b => b.status === "LOST").length;
@@ -2123,7 +2150,30 @@ function TrackBoard({ games }) {
   const roi = totalWagered > 0 ? (units / totalWagered) * 100 : null;
   const winPct = settled.length > 0 ? Math.round((wins / settled.length) * 100) : null;
 
-  // CLV across every leg we could measure
+  // ── Leg-level (MODEL-QUALITY truth — the real signal) ───────────────────
+  let legW = 0, legL = 0, legP = 0;
+  const bySource = {};   // source -> {w,l,p}
+  for (const b of placed) {
+    for (const leg of b.legs) {
+      const r = leg.result || "PENDING";
+      const src = leg.source || "Unknown";
+      if (!bySource[src]) bySource[src] = { w: 0, l: 0, p: 0 };
+      if (r === "WON") { legW++; bySource[src].w++; }
+      else if (r === "LOST") { legL++; bySource[src].l++; }
+      else if (r === "PUSH") { legP++; bySource[src].p++; }
+    }
+  }
+  const legSettled = legW + legL;
+  const legHitRate = legSettled > 0 ? Math.round((legW / legSettled) * 100) : null;
+  const legColor = legHitRate == null ? "#666"
+    : legHitRate >= 58 ? "#00ff87" : legHitRate >= 52 ? "#fbbf24" : "#ff3b3b";
+
+  const sourceRows = Object.entries(bySource)
+    .map(([src, r]) => ({ src, ...r, n: r.w + r.l, rate: (r.w + r.l) > 0 ? Math.round((r.w / (r.w + r.l)) * 100) : null }))
+    .filter(x => x.n > 0)
+    .sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1));
+
+  // ── CLV ─────────────────────────────────────────────────────────────────
   let clvBeat = 0, clvTotal = 0, clvSum = 0, clvPctCount = 0;
   for (const b of placed) {
     for (const leg of b.legs) {
@@ -2147,6 +2197,8 @@ function TrackBoard({ games }) {
       {sub && <div style={{ fontSize: 8, color: "#444", marginTop: 4 }}>{sub}</div>}
     </div>
   );
+
+  const RESULT_COLOR = { WON: "#00ff87", LOST: "#ff3b3b", PUSH: "#888", PENDING: "#fbbf24" };
 
   return (
     <div style={{ paddingBottom: 20 }}>
@@ -2181,13 +2233,59 @@ function TrackBoard({ games }) {
         </div>
       ) : (
         <>
-          {/* Stat grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 12 }}>
-            <Stat label="RECORD" value={`${wins}-${losses}`} sub={winPct != null ? `${winPct}% win` : `${pending} pending`} />
-            <Stat label="UNITS" value={`${units >= 0 ? "+" : ""}${units.toFixed(2)}u`} color={unitsColor} sub={roi != null ? `${roi >= 0 ? "+" : ""}${roi.toFixed(1)}% ROI` : "—"} />
-            <Stat label="BEAT THE CLOSE" value={clvBeatRate != null ? `${clvBeatRate}%` : "—"} color={clvColor} sub={`${clvBeat}/${clvTotal} legs`} />
-            <Stat label="AVG CLV" value={clvAvg != null ? `${clvAvg >= 0 ? "+" : ""}${clvAvg.toFixed(2)}%` : "—"} color={clvColor} sub="ML legs only" />
+          {/* TWO records, kept separate on purpose */}
+          <div style={{ fontSize: 8, color: "#444", letterSpacing: 2, marginBottom: 6 }}>
+            🎯 MODEL SIGNAL — per-pick hit rate (the number that matters)
           </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 12 }}>
+            <Stat label="LEG HIT RATE" value={legHitRate != null ? `${legHitRate}%` : "—"} color={legColor} sub={`${legW}-${legL}${legP ? `-${legP}` : ""} picks`} />
+            <Stat label="BEAT THE CLOSE" value={clvBeatRate != null ? `${clvBeatRate}%` : "—"} color={clvColor} sub={`${clvBeat}/${clvTotal} legs · avg ${clvAvg != null ? `${clvAvg >= 0 ? "+" : ""}${clvAvg.toFixed(2)}%` : "—"}`} />
+          </div>
+          <div style={{ fontSize: 8, color: "#444", letterSpacing: 2, marginBottom: 6 }}>
+            💰 BANKROLL — ticket record (variance, not model quality)
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 16 }}>
+            <Stat label="TICKET RECORD" value={`${wins}-${losses}`} sub={winPct != null ? `${winPct}% · ${pending} pending` : `${pending} pending`} />
+            <Stat label="UNITS" value={`${units >= 0 ? "+" : ""}${units.toFixed(2)}u`} color={unitsColor} sub={roi != null ? `${roi >= 0 ? "+" : ""}${roi.toFixed(1)}% ROI` : "—"} />
+          </div>
+
+          {/* Per-model breakdown — what's hitting at what frequency */}
+          {sourceRows.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 9, color: "#444", letterSpacing: 2, marginBottom: 8 }}>
+                WHAT'S HITTING — leg hit rate by model
+              </div>
+              <div style={{ background: "#0a0a0a", border: "1px solid #1a1a1a", borderRadius: 8, overflow: "hidden" }}>
+                {sourceRows.map((row, i) => {
+                  const rc = row.rate == null ? "#666" : row.rate >= 58 ? "#00ff87" : row.rate >= 50 ? "#fbbf24" : "#ff3b3b";
+                  return (
+                    <div key={row.src} style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      padding: "9px 12px", borderBottom: i < sourceRows.length - 1 ? "1px solid #141414" : "none",
+                    }}>
+                      <div style={{ fontSize: 10, color: "#ccc", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {row.src}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 9, color: "#666", fontFamily: "monospace" }}>
+                          {row.w}-{row.l}{row.p ? `-${row.p}` : ""}
+                        </span>
+                        <span style={{
+                          fontSize: 11, color: rc, fontWeight: 900, fontFamily: "monospace",
+                          minWidth: 42, textAlign: "right",
+                        }}>
+                          {row.rate != null ? `${row.rate}%` : "—"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 8, color: "#333", marginTop: 6, fontStyle: "italic" }}>
+                Settle each leg individually below so this stays accurate per model.
+              </div>
+            </div>
+          )}
 
           {/* CLV verdict */}
           {clvBeatRate != null && clvTotal >= 5 && (
@@ -2197,16 +2295,16 @@ function TrackBoard({ games }) {
               color: clvColor,
             }}>
               {clvBeatRate >= 55
-                ? `✓ You're beating the close ${clvBeatRate}% of the time. That's the signature of a profitable bettor — keep doing exactly this.`
+                ? `✓ Beating the close ${clvBeatRate}% of the time. That's the signature of a profitable bettor — keep doing exactly this.`
                 : clvBeatRate >= 50
-                ? `~ You're roughly even with the close (${clvBeatRate}%). Not losing to the market, but not beating it yet. Need a real edge to profit after vig.`
-                : `✗ You're getting worse prices than the close (${clvBeatRate}%). Long-term this loses money regardless of short-term W/L. The picks aren't finding value.`}
-              {clvTotal < 20 && <span style={{ color: "#666", display: "block", marginTop: 4 }}>Sample still small ({clvTotal} legs) — needs ~30+ to trust.</span>}
+                ? `~ Roughly even with the close (${clvBeatRate}%). Not losing to the market, but not beating it yet.`
+                : `✗ Getting worse prices than the close (${clvBeatRate}%). Long-term this loses regardless of short-term W/L.`}
+              {clvTotal < 20 && <span style={{ color: "#666", display: "block", marginTop: 4 }}>Sample small ({clvTotal} legs) — needs ~30+ to trust.</span>}
             </div>
           )}
 
           {/* Bet log */}
-          <div style={{ fontSize: 9, color: "#444", letterSpacing: 2, marginBottom: 8 }}>BET LOG</div>
+          <div style={{ fontSize: 9, color: "#444", letterSpacing: 2, marginBottom: 8 }}>BET LOG — settle each pick</div>
           {placed.map(b => {
             const dec = parlayOdds(b.legs);
             const pay = b.wager * dec;
@@ -2231,15 +2329,42 @@ function TrackBoard({ games }) {
                 {b.legs.map((leg, i) => {
                   const clv = legCLV(leg);
                   const cc = clv?.beat == null ? "#666" : clv.beat ? "#00ff87" : "#ff3b3b";
+                  const lr = leg.result || "PENDING";
+                  const lrColor = RESULT_COLOR[lr];
+                  const MiniBtn = ({ res, label }) => (
+                    <button onClick={() => updateLegStatus(b.id, i, res)} style={{
+                      background: lr === res ? lrColor : "transparent",
+                      color: lr === res ? "#000" : RESULT_COLOR[res],
+                      border: `1px solid ${RESULT_COLOR[res]}${lr === res ? "" : "50"}`,
+                      borderRadius: 3, fontSize: 8, fontWeight: 800,
+                      padding: "2px 7px", cursor: "pointer", fontFamily: "monospace",
+                    }}>{label}</button>
+                  );
                   return (
                     <div key={i} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: i < b.legs.length - 1 ? "1px solid #141414" : "none" }}>
-                      <div style={{ fontSize: 11, color: "#ddd" }}>
-                        <span style={{ color: "#555" }}>#{i + 1} </span>{leg.play}
-                        <span style={{ color: "#fbbf24", marginLeft: 6, fontFamily: "monospace" }}>
-                          {leg.odds >= 0 ? `+${leg.odds}` : leg.odds}
-                        </span>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 11, color: "#ddd" }}>
+                            <span style={{ color: "#555" }}>#{i + 1} </span>{leg.play}
+                            <span style={{ color: "#fbbf24", marginLeft: 6, fontFamily: "monospace" }}>
+                              {leg.odds >= 0 ? `+${leg.odds}` : leg.odds}
+                            </span>
+                            {lr !== "PENDING" && (
+                              <span style={{ color: lrColor, marginLeft: 6, fontWeight: 900, fontFamily: "monospace" }}>
+                                {lr === "WON" ? "✓" : lr === "LOST" ? "✗" : "="}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 8, color: "#444", marginLeft: 14 }}>
+                            {leg.matchup}{leg.source ? ` · ${leg.source}` : ""}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+                          <MiniBtn res="WON" label="W" />
+                          <MiniBtn res="LOST" label="L" />
+                          <MiniBtn res="PUSH" label="P" />
+                        </div>
                       </div>
-                      <div style={{ fontSize: 8, color: "#444", marginLeft: 14 }}>{leg.matchup}</div>
                       {clv ? (
                         <div style={{ fontSize: 9, color: cc, marginLeft: 14, marginTop: 2, fontFamily: "monospace" }}>
                           {clv.beat == null ? "◦" : clv.beat ? "✓ BEAT CLOSE" : "✗ LOST CLV"}
@@ -2255,15 +2380,12 @@ function TrackBoard({ games }) {
                   );
                 })}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-                  {b.status === "PENDING" ? (
-                    <div style={{ display: "flex", gap: 5 }}>
-                      <button onClick={() => updateStatus(b.id, "WON")} style={{ background: "#00ff8718", color: "#00ff87", border: "1px solid #00ff8750", borderRadius: 4, fontSize: 9, fontWeight: 800, padding: "4px 12px", cursor: "pointer", fontFamily: "monospace" }}>✓ WON</button>
-                      <button onClick={() => updateStatus(b.id, "LOST")} style={{ background: "#ff3b3b18", color: "#ff3b3b", border: "1px solid #ff3b3b50", borderRadius: 4, fontSize: 9, fontWeight: 800, padding: "4px 12px", cursor: "pointer", fontFamily: "monospace" }}>✗ LOST</button>
-                      <button onClick={() => updateStatus(b.id, "PUSH")} style={{ background: "#88888818", color: "#888", border: "1px solid #88888850", borderRadius: 4, fontSize: 9, fontWeight: 800, padding: "4px 12px", cursor: "pointer", fontFamily: "monospace" }}>= PUSH</button>
-                    </div>
-                  ) : (
-                    <button onClick={() => updateStatus(b.id, "PENDING")} style={{ background: "transparent", color: "#444", border: "1px solid #1a1a1a", borderRadius: 4, fontSize: 8, padding: "3px 10px", cursor: "pointer", fontFamily: "monospace" }}>UNDO</button>
-                  )}
+                  <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                    <span style={{ fontSize: 8, color: "#444", letterSpacing: 1 }}>ALL:</span>
+                    <button onClick={() => updateStatus(b.id, "WON")} style={{ background: "#00ff8718", color: "#00ff87", border: "1px solid #00ff8750", borderRadius: 4, fontSize: 8, fontWeight: 800, padding: "3px 9px", cursor: "pointer", fontFamily: "monospace" }}>✓ W</button>
+                    <button onClick={() => updateStatus(b.id, "LOST")} style={{ background: "#ff3b3b18", color: "#ff3b3b", border: "1px solid #ff3b3b50", borderRadius: 4, fontSize: 8, fontWeight: 800, padding: "3px 9px", cursor: "pointer", fontFamily: "monospace" }}>✗ L</button>
+                    <button onClick={() => updateStatus(b.id, "PENDING")} style={{ background: "transparent", color: "#444", border: "1px solid #1a1a1a", borderRadius: 4, fontSize: 8, padding: "3px 9px", cursor: "pointer", fontFamily: "monospace" }}>RESET</button>
+                  </div>
                   <button onClick={() => removePlaced(b.id)} style={{ background: "transparent", border: "none", color: "#333", fontSize: 15, cursor: "pointer" }}>×</button>
                 </div>
               </div>
