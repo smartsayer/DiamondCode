@@ -2002,16 +2002,20 @@ class AIPicksEngine:
         """
         THE FORMULA — self-contained correlated parlay.
 
-        Each qualifying game contributes a correlated PAIR:
+        Each qualifying game contributes 2-3 correlated legs:
           • UNDER  — best of {full-game UNDER, F5 UNDER}  (never both;
             books block two correlated unders on one parlay)
           • TEAM CONTROL — Favorite ML OR Dog +1.5 RL (whichever edges
             better)
+          • NRFI PAD (optional) — no run in the 1st. Added ONLY when the
+            game-total under is chosen; if F5 is the under, NRFI is nested
+            inside it (innings 1-5) and books block the combo.
 
         These aren't independent bets — they're one thesis ("low-scoring,
-        tightly-played game"). The control leg is positively correlated
-        with the under: low totals mean close games with no blowouts. The
-        book prices them independently. That gap is the edge. Up to 4 games.
+        tightly-played game"). Every leg is positively correlated: low
+        totals mean close games with no blowouts and quiet first innings.
+        The book prices them independently. That gap is the edge.
+        Up to 4 games.
         """
         under_by_pk = {u.get("game_pk"): u for u in top_unders}
         fave_by_pk = {f.get("game_pk"): f for f in broad_faves}
@@ -2128,15 +2132,35 @@ class AIPicksEngine:
                 },
             ]
 
-            # Naive (independent) PAIR probability — what the book prices off
-            naive_triple = under_leg["our_prob"] * control["our_prob"]
-            # Correlation-adjusted, HONESTLY bounded. Hard ceiling: P(A∩B)
+            # ── NRFI pad — first-inning no-run, correlated with the script ─
+            # Only when the chosen under is the FULL-GAME under. If F5 was
+            # chosen, NRFI is nested inside it (F5 = innings 1-5) and books
+            # block that combo. Game-total + NRFI are different markets =
+            # placeable.
+            nrfi_prob_pct = (g.get("nrfi") or {}).get("nrfi_probability", 0)
+            if under_leg["type"] == "FORMULA_UNDER" and nrfi_prob_pct >= 58:
+                nrfi_prob = max(0.50, min(0.80, nrfi_prob_pct / 100.0))
+                # No NRFI market in the free feed — fair price from prob
+                # with a ~4% vig haircut (standard NRFI juice ≈ -115/-130).
+                nrfi_odds = pricing.prob_to_american(min(0.95, nrfi_prob * 1.04))
+                legs.append({
+                    "matchup": matchup, "play": "NRFI (no run 1st inning)",
+                    "type": "FORMULA_NRFI", "odds": nrfi_odds,
+                    "edge": pricing.price_leg(nrfi_prob, nrfi_odds),
+                    "our_prob": nrfi_prob, "leg_role": "NRFI PAD",
+                })
+
+            # Naive (independent) joint probability — what the book prices off
+            naive_triple = 1.0
+            for _lg in legs:
+                naive_triple *= _lg["our_prob"]
+            # Correlation-adjusted, HONESTLY bounded. Hard ceiling: the joint
             # can never exceed its least-likely leg. Positive correlation
             # moves the true joint a CONSERVATIVE fraction of the way from
             # independent toward that ceiling. 0.30 = moderate correlation
             # (transparent knob). Keeps the estimate believable instead of
             # fabricating a "CRUSH" the way naive p**k would.
-            min_leg = min(under_leg["our_prob"], control["our_prob"])
+            min_leg = min(_lg["our_prob"] for _lg in legs)
             _CORR_FACTOR = 0.30
             corr_triple = naive_triple + _CORR_FACTOR * (min_leg - naive_triple)
 
@@ -2221,10 +2245,10 @@ class AIPicksEngine:
             "joint_naive_pct": round(joint_naive * 100, 2),
             "joint_corr_pct": round(joint_corr * 100, 2),
             "note": f"{len(top)}-game correlated stack · {len(all_legs)} legs "
-                    f"(2 per game — one under + control; books block two "
-                    f"correlated unders on one ticket). No parlay-EV headline "
-                    f"on purpose: stacking compounds model error. Per-leg edges "
-                    f"+ correlation lift below; the TRACK tab is the judge.",
+                    f"(under + control, plus an NRFI pad when the game-total "
+                    f"under is in play). No parlay-EV headline on purpose: "
+                    f"stacking compounds model error. Per-leg edges + "
+                    f"correlation lift below; the TRACK tab is the judge.",
         }
 
     def _build_sharp_parlay(self, games: list[dict[str, Any]]) -> dict[str, Any]:

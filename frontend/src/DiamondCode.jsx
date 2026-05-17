@@ -2345,8 +2345,8 @@ function FormulaParlayCard({ parlay }) {
         🎯 THE FORMULA
       </div>
       <div style={{ fontSize: 9, color: "#888", marginTop: 4, lineHeight: 1.5 }}>
-        Self-contained correlated parlay — each game pairs <strong style={{ color: "#aaa" }}>one UNDER (game or F5) + Favorite ML or Dog +1.5</strong>.
-        One thesis: <em>a low-scoring game the better team controls.</em> (Two correlated unders can't ride the same ticket — we keep the stronger.)
+        Self-contained correlated parlay — each game stacks <strong style={{ color: "#aaa" }}>one UNDER (game or F5) + Fav ML or Dog +1.5</strong>, plus an <strong style={{ color: "#aaa" }}>NRFI pad</strong> when the game total is in play.
+        One thesis: <em>a low-scoring, tightly-played game.</em> (Nested unders can't share a ticket — we keep what books allow.)
       </div>
 
       {!hasGames && (
@@ -2465,7 +2465,7 @@ function FormulaParlayCard({ parlay }) {
                   color: GOLD, fontSize: 8, fontWeight: 800, fontFamily: "monospace",
                   letterSpacing: 1, padding: "4px 10px", borderRadius: 4, cursor: "pointer",
                 }}>
-                  + ADD BOTH
+                  + ADD ALL {g.legs.length}
                 </button>
               </div>
             </div>
