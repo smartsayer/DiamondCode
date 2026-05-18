@@ -4210,7 +4210,7 @@ function DiamondCode() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
           <div>
             <div style={{ fontSize: 26, fontWeight: 900, color: "#fff", letterSpacing: -1 }}>
-              SQUEEZE<span style={{ color: "#00ff87" }}>PARLAY</span>
+              SQUEEZE<span style={{ color: "#00ff87" }}>ParLAY</span>
             </div>
             <div style={{ fontSize: 10, color: "#333", marginTop: 3 }}>
               Park · Pitcher · Weather · Umpire · Fatigue · Lines · Bullpen · Dog
@@ -4233,7 +4233,7 @@ function DiamondCode() {
       {/* Error */}
       {error && (
         <div style={{ background: "#ff3b3b12", border: "1px solid #ff3b3b25", borderRadius: 6, padding: "12px 16px", marginBottom: 18 }}>
-          <div style={{ color: "#ff3b3b", fontSize: 10 }}>⚠ Could not reach the SQUEEZEPARLAY server — retrying automatically</div>
+          <div style={{ color: "#ff3b3b", fontSize: 10 }}>⚠ Could not reach the SQUEEZEParLAY server — retrying automatically</div>
           <div style={{ color: "#333", fontSize: 9, marginTop: 3 }}>{error}</div>
         </div>
       )}
@@ -4352,7 +4352,7 @@ function DiamondCode() {
 
       <Legend />
       <div style={{ textAlign: "center", marginTop: 18, fontSize: 8, color: "#1a1a1a", letterSpacing: 2 }}>
-        SQUEEZEPARLAY v3.0 · INFORMATIONAL USE ONLY · GAMBLE RESPONSIBLY
+        SQUEEZEParLAY v3.0 · INFORMATIONAL USE ONLY · GAMBLE RESPONSIBLY
       </div>
     </div>
   );
